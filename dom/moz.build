@@ -36,6 +36,7 @@ DIRS += [
     "compression",
     "cookiestore",
     "credentialmanagement",
+    "crossoriginstorage",
     "crypto",
     "debugger",
     "documentpip",

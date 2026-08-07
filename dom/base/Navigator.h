@@ -87,6 +87,7 @@ class VRDisplay;
 class VRServiceTest;
 class XRSystem;
 class StorageManager;
+class CrossOriginStorageManager;
 class MediaCapabilities;
 class MediaSession;
 class UserActivation;
@@ -230,6 +231,8 @@ class Navigator final : public nsISupports, public nsWrapperCache {
 
   StorageManager* Storage();
 
+  CrossOriginStorageManager* CrossOriginStorage();
+
   static void GetAcceptLanguages(nsTArray<nsString>& aLanguages,
                                  const nsCString* aLanguageOverride);
 
@@ -316,6 +319,7 @@ class Navigator final : public nsISupports, public nsWrapperCache {
   RefPtr<XRSystem> mXRSystem;
   nsTArray<uint32_t> mRequestedVibrationPattern;
   RefPtr<StorageManager> mStorageManager;
+  RefPtr<CrossOriginStorageManager> mCrossOriginStorageManager;
   RefPtr<dom::MediaCapabilities> mMediaCapabilities;
   RefPtr<dom::MediaSession> mMediaSession;
   RefPtr<dom::AudioSession> mAudioSession;

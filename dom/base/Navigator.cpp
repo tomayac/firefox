@@ -47,6 +47,7 @@
 #include "mozilla/dom/Clipboard.h"
 #include "mozilla/dom/ContentChild.h"
 #include "mozilla/dom/CredentialsContainer.h"
+#include "mozilla/dom/CrossOriginStorageManager.h"
 #include "mozilla/dom/Event.h"  // for Event
 #include "mozilla/dom/FeaturePolicyUtils.h"
 #include "mozilla/dom/GamepadServiceTest.h"
@@ -150,6 +151,7 @@ NS_IMPL_CYCLE_COLLECTION_TRAVERSE_BEGIN(Navigator)
   NS_IMPL_CYCLE_COLLECTION_TRAVERSE(mBatteryPromise)
   NS_IMPL_CYCLE_COLLECTION_TRAVERSE(mConnection)
   NS_IMPL_CYCLE_COLLECTION_TRAVERSE(mStorageManager)
+  NS_IMPL_CYCLE_COLLECTION_TRAVERSE(mCrossOriginStorageManager)
   NS_IMPL_CYCLE_COLLECTION_TRAVERSE(mCredentials)
   NS_IMPL_CYCLE_COLLECTION_TRAVERSE(mMediaDevices)
   NS_IMPL_CYCLE_COLLECTION_TRAVERSE(mServiceWorkerContainer)
@@ -187,6 +189,8 @@ void Navigator::Invalidate() {
     mStorageManager->Shutdown();
     mStorageManager = nullptr;
   }
+
+  mCrossOriginStorageManager = nullptr;
 
   // If there is a page transition, make sure delete the geolocation object.
   if (mGeolocation) {
@@ -558,6 +562,17 @@ StorageManager* Navigator::Storage() {
   }
 
   return mStorageManager;
+}
+
+CrossOriginStorageManager* Navigator::CrossOriginStorage() {
+  MOZ_ASSERT(mWindow);
+
+  if (!mCrossOriginStorageManager) {
+    mCrossOriginStorageManager =
+        new CrossOriginStorageManager(mWindow->AsGlobal());
+  }
+
+  return mCrossOriginStorageManager;
 }
 
 bool Navigator::CookieEnabled() {

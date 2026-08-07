@@ -83,6 +83,9 @@ with Files("GeolocationCoordinates.webidl"):
 with Files("CredentialManagement.webidl"):
     BUG_COMPONENT = ("Core", "DOM: Credential Management")
 
+with Files("CrossOriginStorage.webidl"):
+    BUG_COMPONENT = ("Core", "DOM: File")
+
 with Files("Crypto.webidl"):
     BUG_COMPONENT = ("Core", "DOM: Security")
 
@@ -503,6 +506,7 @@ WEBIDL_FILES = [
     "CookieStoreManager.webidl",
     "CreateOfferRequest.webidl",
     "CredentialManagement.webidl",
+    "CrossOriginStorage.webidl",
     "Crypto.webidl",
     "CSPDictionaries.webidl",
     "CSPReport.webidl",

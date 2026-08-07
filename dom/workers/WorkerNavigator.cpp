@@ -9,6 +9,7 @@
 #include "RuntimeService.h"
 #include "WorkerRunnable.h"
 #include "WorkerScope.h"
+#include "mozilla/dom/CrossOriginStorageManager.h"
 #include "mozilla/dom/LockManager.h"
 #include "mozilla/dom/MediaCapabilities.h"
 #include "mozilla/dom/Navigator.h"
@@ -45,6 +46,7 @@ NS_IMPL_CYCLE_COLLECTION_UNLINK_END
 
 NS_IMPL_CYCLE_COLLECTION_TRAVERSE_BEGIN(WorkerNavigator)
   NS_IMPL_CYCLE_COLLECTION_TRAVERSE(mStorageManager)
+  NS_IMPL_CYCLE_COLLECTION_TRAVERSE(mCrossOriginStorageManager)
   NS_IMPL_CYCLE_COLLECTION_TRAVERSE(mConnection)
   NS_IMPL_CYCLE_COLLECTION_TRAVERSE(mMediaCapabilities)
   NS_IMPL_CYCLE_COLLECTION_TRAVERSE(mWebGpu)
@@ -83,6 +85,8 @@ void WorkerNavigator::Invalidate() {
     mStorageManager->Shutdown();
     mStorageManager = nullptr;
   }
+
+  mCrossOriginStorageManager = nullptr;
 
   mConnection = nullptr;
 
@@ -251,6 +255,20 @@ StorageManager* WorkerNavigator::Storage() {
   }
 
   return mStorageManager;
+}
+
+CrossOriginStorageManager* WorkerNavigator::CrossOriginStorage() {
+  if (!mCrossOriginStorageManager) {
+    WorkerPrivate* workerPrivate = GetCurrentThreadWorkerPrivate();
+    MOZ_ASSERT(workerPrivate);
+
+    RefPtr<nsIGlobalObject> global = workerPrivate->GlobalScope();
+    MOZ_ASSERT(global);
+
+    mCrossOriginStorageManager = new CrossOriginStorageManager(global);
+  }
+
+  return mCrossOriginStorageManager;
 }
 
 network::Connection* WorkerNavigator::GetConnection(ErrorResult& aRv) {

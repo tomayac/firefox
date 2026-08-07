@@ -28,6 +28,7 @@ class Instance;
 }  // namespace webgpu
 namespace dom {
 class StorageManager;
+class CrossOriginStorageManager;
 class MediaCapabilities;
 class LockManager;
 class Permissions;
@@ -44,6 +45,7 @@ class WorkerNavigator final : public nsWrapperCache {
 
   NavigatorProperties mProperties;
   RefPtr<StorageManager> mStorageManager;
+  RefPtr<CrossOriginStorageManager> mCrossOriginStorageManager;
   RefPtr<network::Connection> mConnection;
   RefPtr<dom::MediaCapabilities> mMediaCapabilities;
   RefPtr<webgpu::Instance> mWebGpu;
@@ -110,6 +112,8 @@ class WorkerNavigator final : public nsWrapperCache {
   uint64_t HardwareConcurrency() const;
 
   StorageManager* Storage();
+
+  CrossOriginStorageManager* CrossOriginStorage();
 
   network::Connection* GetConnection(ErrorResult& aRv);
 

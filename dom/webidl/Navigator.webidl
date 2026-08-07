@@ -38,6 +38,7 @@ Navigator includes NavigatorContentUtils;
 Navigator includes NavigatorStorageUtils;
 Navigator includes NavigatorConcurrentHardware;
 Navigator includes NavigatorStorage;
+Navigator includes NavigatorCrossOriginStorage;
 Navigator includes NavigatorAutomationInformation;
 Navigator includes NavigatorGPU;
 Navigator includes GlobalPrivacyControl;
