@@ -45,6 +45,8 @@ static FeatureMap sSupportedFeatures[] = {
     {"serial", FeaturePolicyUtils::FeaturePolicyValue::eSelf},
     {"speaker-selection", FeaturePolicyUtils::FeaturePolicyValue::eSelf},
     {"storage-access", FeaturePolicyUtils::FeaturePolicyValue::eAll},
+    // https://wicg.github.io/cross-origin-storage/#permissions-policy-integration
+    {"cross-origin-storage", FeaturePolicyUtils::FeaturePolicyValue::eSelf},
     {"screen-wake-lock", FeaturePolicyUtils::FeaturePolicyValue::eSelf},
     {"loopback-network", FeaturePolicyUtils::FeaturePolicyValue::eSelf},
     {"local-network", FeaturePolicyUtils::FeaturePolicyValue::eSelf},
