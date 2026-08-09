@@ -14,6 +14,14 @@ namespace mozilla::dom {
 using mozilla::ipc::IPCResult;
 using mozilla::ipc::PrincipalInfo;
 
+// A flat placeholder ceiling on a single write session's in-memory buffer,
+// matching Servo's and Ladybird's own chosen starting point (both call this
+// out as a stopgap, not real storage-budget accounting): without it,
+// seek()/truncate() can grow WriteSession::mBytes without bound, an
+// unbounded-allocation DoS. Checked before ever growing the buffer, not
+// after -- the point is to never actually perform the oversized allocation.
+constexpr uint64_t kMaxCOSWriteBytes = 4ull * 1024 * 1024 * 1024;  // 4 GiB
+
 void CrossOriginStorageParent::ActorDestroy(ActorDestroyReason aWhy) {
   mozilla::ipc::AssertIsOnBackgroundThread();
 
@@ -107,14 +115,19 @@ mozilla::ipc::IPCResult CrossOriginStorageParent::RecvWriteChunk(
   mozilla::ipc::AssertIsOnBackgroundThread();
 
   WriteSession* session = mWriteSessions.Get(aWriteId);
-  if (!session) {
+  if (!session || session->mWriteTargetTooLarge) {
+    return IPC_OK();
+  }
+
+  uint64_t endPosition = session->mPosition + aChunk.Length();
+  if (endPosition > kMaxCOSWriteBytes) {
+    session->mWriteTargetTooLarge = true;
     return IPC_OK();
   }
 
   // Positioned write: extends and zero-fills up to mPosition first if the
   // cursor was moved past the current end by a prior Seek (nsTArray::
   // SetLength value-initializes new elements -- zero for uint8_t).
-  uint64_t endPosition = session->mPosition + aChunk.Length();
   if (endPosition > session->mBytes.Length()) {
     session->mBytes.SetLength(endPosition);
   }
@@ -141,9 +154,15 @@ mozilla::ipc::IPCResult CrossOriginStorageParent::RecvTruncate(
   mozilla::ipc::AssertIsOnBackgroundThread();
 
   WriteSession* session = mWriteSessions.Get(aWriteId);
-  if (!session) {
+  if (!session || session->mWriteTargetTooLarge) {
     return IPC_OK();
   }
+
+  if (aSize > kMaxCOSWriteBytes) {
+    session->mWriteTargetTooLarge = true;
+    return IPC_OK();
+  }
+
   session->mBytes.SetLength(aSize);
   if (session->mPosition > aSize) {
     session->mPosition = aSize;
@@ -158,6 +177,17 @@ mozilla::ipc::IPCResult CrossOriginStorageParent::RecvFinishWrite(
   WriteSession* session = mWriteSessions.Get(aWriteId);
   if (!session) {
     aResolve(nsresult(NS_ERROR_UNEXPECTED));
+    return IPC_OK();
+  }
+
+  if (session->mWriteTargetTooLarge) {
+    // Mirrors VerifyAndStore's own hash-mismatch cleanup below: same
+    // DataError, same outstanding-writer release, since no entry was ever
+    // written.
+    CrossOriginStorageRegistry::GetOrCreate().ReleaseOutstandingWriter(
+        session->mAlgorithm, session->mValue);
+    mWriteSessions.Remove(aWriteId);
+    aResolve(nsresult(NS_ERROR_DOM_DATA_ERR));
     return IPC_OK();
   }
 

@@ -44,7 +44,11 @@ namespace mozilla::dom {
 //   mechanisms for the wildcard case specifically, don't exist yet. This
 //   is a real, deliberate gap -- acceptable for a disabled-by-default,
 //   unshipped local build, not for anything further along.
-// - No rate limiting, and no storage-budget/eviction accounting.
+// - No rate limiting, and no real storage-budget/eviction accounting -- a
+//   single write session is capped at a flat 4 GiB ceiling
+//   (CrossOriginStorageParent.cpp's kMaxCOSWriteBytes, matching Servo's and
+//   Ladybird's own starting point) purely to bound worst-case memory use,
+//   not as a substitute for real per-origin/global budget tracking.
 class CrossOriginStorageRegistry {
  public:
   static CrossOriginStorageRegistry& GetOrCreate();

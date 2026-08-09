@@ -76,6 +76,12 @@ class CrossOriginStorageParent final : public PCrossOriginStorageParent {
     // directly by Seek, and clamped by Truncate. Defaults to the start, per
     // the File System Standard's createWritable() (no keepExistingData).
     uint64_t mPosition = 0;
+    // Set once a WriteChunk/Truncate would grow mBytes past
+    // kMaxCOSWriteBytes; that operation is dropped without ever performing
+    // the oversized allocation, and every later WriteChunk/Truncate for
+    // this session is dropped too. FinishWrite checks this first and fails
+    // the close() with DataError instead of running verify-and-store.
+    bool mWriteTargetTooLarge = false;
   };
 
   nsClassHashtable<nsUint64HashKey, WriteSession> mWriteSessions;
