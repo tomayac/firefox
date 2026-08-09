@@ -210,4 +210,28 @@ void CrossOriginStorageRegistry::ReleaseOutstandingWriter(
   }
 }
 
+CrossOriginStorageRegistry::ReadOutcome
+CrossOriginStorageRegistry::GetFileBytes(COSHashAlgorithm aAlgorithm,
+                                         const nsACString& aValue,
+                                         nsTArray<uint8_t>& aOutBytes) {
+  mozilla::ipc::AssertIsOnBackgroundThread();
+
+  nsAutoCString key = MakeKey(aAlgorithm, aValue);
+  Entry* entry = mEntries.Get(key);
+  if (!entry) {
+    return ReadOutcome::NotFound;
+  }
+
+  if (entry->mState == Entry::State::Pending) {
+    if (entry->IsStale()) {
+      mEntries.Remove(key);
+      return ReadOutcome::NotFound;
+    }
+    return ReadOutcome::Pending;
+  }
+
+  aOutBytes = entry->mBytes.Clone();
+  return ReadOutcome::Found;
+}
+
 }  // namespace mozilla::dom

@@ -24,6 +24,19 @@ union COSRequestFileHandleResult
   nsresult;
 };
 
+// Success payload for GetFileBytes: the entry's complete written bytes. On
+// failure, `result` is an nsresult the child maps to the DOMException
+// getFile() should reject with (NotAllowedError while still pending,
+// NotFoundError if the entry is otherwise gone). No principal is needed
+// here -- the handle this backs was already fully authorized when it was
+// obtained via RequestFileHandle; see
+// https://wicg.github.io/cross-origin-storage/#cos-file-system.
+union COSGetFileBytesResult
+{
+  uint8_t[];
+  nsresult;
+};
+
 // The registry backing navigator.crossOriginStorage, per
 // https://wicg.github.io/cross-origin-storage/. A single instance is shared
 // by every content process, deliberately not scoped by origin the way
@@ -40,6 +53,12 @@ parent:
   async RequestFileHandle(nsCString algorithm, nsCString value, bool create,
                           PrincipalInfo requestingPrincipal)
       returns (COSRequestFileHandleResult result);
+
+  // https://wicg.github.io/cross-origin-storage/#cos-file-system
+  // Backs FileSystemFileHandle.getFile() on a handle obtained via
+  // RequestFileHandle above.
+  async GetFileBytes(nsCString algorithm, nsCString value)
+      returns (COSGetFileBytesResult result);
 
   // A create-backed write session. BeginWrite establishes it for the pending
   // entry created by a prior RequestFileHandle(create: true); WriteChunk

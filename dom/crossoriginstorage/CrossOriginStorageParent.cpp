@@ -150,4 +150,39 @@ mozilla::ipc::IPCResult CrossOriginStorageParent::RecvAbortWrite(
   return IPC_OK();
 }
 
+mozilla::ipc::IPCResult CrossOriginStorageParent::RecvGetFileBytes(
+    const nsCString& aAlgorithm, const nsCString& aValue,
+    GetFileBytesResolver&& aResolve) {
+  mozilla::ipc::AssertIsOnBackgroundThread();
+
+  Maybe<COSHashAlgorithm> algorithm =
+      ParseHashAlgorithm(NS_ConvertUTF8toUTF16(aAlgorithm));
+  if (!algorithm) {
+    COSGetFileBytesResult result;
+    result = nsresult(NS_ERROR_DOM_NOT_FOUND_ERR);
+    aResolve(result);
+    return IPC_OK();
+  }
+
+  nsTArray<uint8_t> bytes;
+  CrossOriginStorageRegistry::ReadOutcome outcome =
+      CrossOriginStorageRegistry::GetOrCreate().GetFileBytes(*algorithm, aValue,
+                                                             bytes);
+
+  COSGetFileBytesResult result;
+  switch (outcome) {
+    case CrossOriginStorageRegistry::ReadOutcome::Found:
+      result = std::move(bytes);
+      break;
+    case CrossOriginStorageRegistry::ReadOutcome::Pending:
+      result = nsresult(NS_ERROR_DOM_NOT_ALLOWED_ERR);
+      break;
+    case CrossOriginStorageRegistry::ReadOutcome::NotFound:
+      result = nsresult(NS_ERROR_DOM_NOT_FOUND_ERR);
+      break;
+  }
+  aResolve(result);
+  return IPC_OK();
+}
+
 }  // namespace mozilla::dom

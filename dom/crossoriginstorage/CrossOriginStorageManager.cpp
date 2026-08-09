@@ -4,13 +4,21 @@
 
 #include "CrossOriginStorageManager.h"
 
+#include "CrossOriginStorageChild.h"
+#include "CrossOriginStorageRequestHandler.h"
 #include "CrossOriginStorageUtils.h"
 #include "mozilla/BasePrincipal.h"
 #include "mozilla/ErrorResult.h"
+#include "mozilla/UniquePtr.h"
 #include "mozilla/dom/CrossOriginStorageBinding.h"
 #include "mozilla/dom/Document.h"
 #include "mozilla/dom/FeaturePolicyUtils.h"
+#include "mozilla/dom/FileSystemFileHandle.h"
+#include "mozilla/dom/FileSystemManager.h"
 #include "mozilla/dom/Promise.h"
+#include "mozilla/ipc/BackgroundChild.h"
+#include "mozilla/ipc/BackgroundUtils.h"
+#include "mozilla/ipc/PBackgroundChild.h"
 #include "nsContentUtils.h"
 #include "nsIGlobalObject.h"
 #include "nsIURI.h"
@@ -192,20 +200,91 @@ already_AddRefed<Promise> CrossOriginStorageManager::RequestFileHandle(
 
   // Steps 6-7.
   ErrorResult validationError;
-  [[maybe_unused]] Maybe<COSHashAlgorithm> algorithm =
+  Maybe<COSHashAlgorithm> algorithm =
       ValidateRequest(aHash, aOptions, validationError);
   if (validationError.Failed()) {
     MOZ_ASSERT(algorithm.isNothing());
     promise->MaybeReject(std::move(validationError));
     return promise.forget();
   }
+  MOZ_ASSERT(algorithm.isSome());
 
-  // TODO(Bug TBD): step 8, "complete a create request" / "complete a read
-  // request", lands in a follow-up patch that sends *algorithm and the rest
-  // of this request to the Cross-Origin Storage registry actor.
-  promise->MaybeRejectWithNotSupportedError(
-      "Cross-Origin Storage is not yet implemented");
+  CrossOriginStorageChild* actor = EnsureActor();
+  if (!actor) {
+    promise->MaybeRejectWithUnknownError(
+        "Cross-Origin Storage is not available");
+    return promise.forget();
+  }
+
+  nsIPrincipal* principal = mGlobal->PrincipalOrNull();
+  mozilla::ipc::PrincipalInfo principalInfo;
+  if (!principal ||
+      NS_FAILED(PrincipalToPrincipalInfo(principal, &principalInfo))) {
+    promise->MaybeRejectWithNotAllowedError(
+        "Cross-Origin Storage requires a principal");
+    return promise.forget();
+  }
+
+  nsAutoCString value(NS_ConvertUTF16toUTF8(aHash.mValue));
+  nsAutoCString algorithmName(CanonicalHashAlgorithmName(*algorithm));
+  bool create = aOptions.mCreate;
+
+  // Step 8.
+  actor->SendRequestFileHandle(algorithmName, value, create, principalInfo)
+      ->Then(
+          GetCurrentSerialEventTarget(), __func__,
+          [promise, global = mGlobal, actor = RefPtr(actor),
+           algorithm = *algorithm,
+           value](const CrossOriginStorageChild::RequestFileHandlePromise::
+                      ResolveOrRejectValue& aResult) {
+            if (!aResult.IsResolve()) {
+              promise->MaybeRejectWithUnknownError(
+                  "Cross-Origin Storage IPC error");
+              return;
+            }
+            const COSRequestFileHandleResult& result = aResult.ResolveValue();
+            if (result.type() == COSRequestFileHandleResult::Tnsresult) {
+              promise->MaybeReject(result.get_nsresult());
+              return;
+            }
+
+            // https://wicg.github.io/cross-origin-storage/#complete-a-read-request
+            // and #complete-a-create-request: "creating a new
+            // FileSystemFileHandle" whose locator addresses the entry.
+            // entryId only needs to be non-empty and stable for this
+            // handle; the request handler below carries the actual
+            // algorithm/value it acts on directly, not via this locator.
+            fs::FileSystemEntryMetadata metadata(
+                value, NS_ConvertUTF8toUTF16(value), /* directory */ false);
+            RefPtr<FileSystemManager> nullManager;
+            auto requestHandler = MakeUnique<CrossOriginStorageRequestHandler>(
+                actor, algorithm, value);
+            RefPtr<FileSystemFileHandle> handle = new FileSystemFileHandle(
+                global, nullManager, metadata, requestHandler.release());
+            promise->MaybeResolve(handle);
+          });
+
   return promise.forget();
+}
+
+CrossOriginStorageChild* CrossOriginStorageManager::EnsureActor() {
+  if (mActor && mActor->CanSend()) {
+    return mActor;
+  }
+
+  mozilla::ipc::PBackgroundChild* background =
+      mozilla::ipc::BackgroundChild::GetOrCreateForCurrentThread();
+  if (!background) {
+    return nullptr;
+  }
+
+  mActor = new CrossOriginStorageChild();
+  if (!background->SendPCrossOriginStorageConstructor(mActor)) {
+    mActor = nullptr;
+    return nullptr;
+  }
+
+  return mActor;
 }
 
 }  // namespace mozilla::dom

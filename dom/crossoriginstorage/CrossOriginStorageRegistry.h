@@ -88,6 +88,16 @@ class CrossOriginStorageRegistry {
   void ReleaseOutstandingWriter(COSHashAlgorithm aAlgorithm,
                                 const nsACString& aValue);
 
+  // Backs FileSystemFileHandle.getFile() on a handle already obtained via
+  // CompleteReadRequest/CompleteCreateRequest -- so, unlike those, this
+  // does not repeat availability gating; it only checks the entry's
+  // current state
+  // (https://wicg.github.io/cross-origin-storage/#cos-file-system) and, if
+  // Found, copies its bytes into aOutBytes.
+  ReadOutcome GetFileBytes(COSHashAlgorithm aAlgorithm,
+                           const nsACString& aValue,
+                           nsTArray<uint8_t>& aOutBytes);
+
  private:
   CrossOriginStorageRegistry() = default;
 

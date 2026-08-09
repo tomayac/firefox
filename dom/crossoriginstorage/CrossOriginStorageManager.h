@@ -7,6 +7,7 @@
 
 #include "js/TypeDecls.h"
 #include "mozilla/AlreadyAddRefed.h"
+#include "mozilla/RefPtr.h"
 #include "nsCOMPtr.h"
 #include "nsCycleCollectionParticipant.h"
 #include "nsISupports.h"
@@ -21,6 +22,7 @@ class ErrorResult;
 
 namespace dom {
 
+class CrossOriginStorageChild;
 class Promise;
 struct CrossOriginStorageRequestFileHandleHash;
 struct CrossOriginStorageRequestFileHandleOptions;
@@ -29,6 +31,7 @@ struct CrossOriginStorageRequestFileHandleOptions;
 class CrossOriginStorageManager final : public nsISupports,
                                         public nsWrapperCache {
   nsCOMPtr<nsIGlobalObject> mGlobal;
+  RefPtr<CrossOriginStorageChild> mActor;
 
  public:
   explicit CrossOriginStorageManager(nsIGlobalObject* aGlobal);
@@ -50,6 +53,12 @@ class CrossOriginStorageManager final : public nsISupports,
 
  private:
   ~CrossOriginStorageManager() = default;
+
+  // Lazily creates (on first use) the per-global PCrossOriginStorage child
+  // actor every requestFileHandle() call, and every FileSystemFileHandle
+  // obtained from one, talks to. Returns null if PBackground isn't
+  // available (e.g. the global is already shutting down).
+  CrossOriginStorageChild* EnsureActor();
 };
 
 }  // namespace dom

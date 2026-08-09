@@ -10,6 +10,8 @@ EXPORTS.mozilla.dom += [
     "CrossOriginStorageManager.h",
     "CrossOriginStorageParent.h",
     "CrossOriginStorageRegistry.h",
+    "CrossOriginStorageRequestHandler.h",
+    "CrossOriginStorageSinkAlgorithms.h",
     "CrossOriginStorageUtils.h",
 ]
 
@@ -17,6 +19,8 @@ UNIFIED_SOURCES += [
     "CrossOriginStorageManager.cpp",
     "CrossOriginStorageParent.cpp",
     "CrossOriginStorageRegistry.cpp",
+    "CrossOriginStorageRequestHandler.cpp",
+    "CrossOriginStorageSinkAlgorithms.cpp",
     "CrossOriginStorageUtils.cpp",
 ]
 
@@ -29,6 +33,7 @@ include("/ipc/chromium/chromium-config.mozbuild")
 FINAL_LIBRARY = "xul"
 
 LOCAL_INCLUDES += [
+    "/dom/fs/include",
     "/security/manager/ssl",
     "/xpcom/build",
 ]

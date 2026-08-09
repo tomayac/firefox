@@ -54,6 +54,10 @@ class CrossOriginStorageParent final : public PCrossOriginStorageParent {
 
   mozilla::ipc::IPCResult RecvAbortWrite(uint64_t aWriteId);
 
+  mozilla::ipc::IPCResult RecvGetFileBytes(const nsCString& aAlgorithm,
+                                           const nsCString& aValue,
+                                           GetFileBytesResolver&& aResolve);
+
   struct WriteSession {
     COSHashAlgorithm mAlgorithm;
     nsCString mValue;
