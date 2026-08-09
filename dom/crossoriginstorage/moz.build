@@ -13,6 +13,7 @@ EXPORTS.mozilla.dom += [
     "CrossOriginStorageRequestHandler.h",
     "CrossOriginStorageSinkAlgorithms.h",
     "CrossOriginStorageUtils.h",
+    "CrossOriginStorageWritableFileStream.h",
 ]
 
 UNIFIED_SOURCES += [
@@ -22,6 +23,7 @@ UNIFIED_SOURCES += [
     "CrossOriginStorageRequestHandler.cpp",
     "CrossOriginStorageSinkAlgorithms.cpp",
     "CrossOriginStorageUtils.cpp",
+    "CrossOriginStorageWritableFileStream.cpp",
 ]
 
 IPDL_SOURCES += [
@@ -34,6 +36,7 @@ FINAL_LIBRARY = "xul"
 
 LOCAL_INCLUDES += [
     "/dom/fs/include",
+    "/dom/streams",
     "/security/manager/ssl",
     "/xpcom/build",
 ]

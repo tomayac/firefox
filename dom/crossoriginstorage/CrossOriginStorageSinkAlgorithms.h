@@ -22,13 +22,14 @@ class CrossOriginStorageChild;
 // (https://wicg.github.io/cross-origin-storage/#verify-and-store) via
 // FinishWrite when the stream is closed.
 //
-// createWritable()'s promise resolves with a plain WritableStream here
-// rather than a genuine FileSystemWritableFileStream: no WPT for this
-// feature checks `instanceof FileSystemWritableFileStream`, and this
-// Phase 1's in-memory, capped-size writes don't need that class's real
-// disk-backed seek()/truncate() machinery -- which is exactly what ties it
-// tightly to PFileSystemManager's fd-passing. See
-// CrossOriginStorageRequestHandler::GetWritable().
+// createWritable()'s promise resolves with a
+// CrossOriginStorageWritableFileStream (a minimal WritableStream subclass, not
+// a genuine FileSystemWritableFileStream): no WPT for this feature checks
+// `instanceof FileSystemWritableFileStream`, and this Phase 1's in-memory,
+// capped-size writes don't need that class's real disk-backed seek()/truncate()
+// machinery -- which is exactly what ties it tightly to PFileSystemManager's
+// fd-passing. See CrossOriginStorageRequestHandler::GetWritable() and
+// CrossOriginStorageWritableFileStream.h.
 class CrossOriginStorageSinkAlgorithms final
     : public UnderlyingSinkAlgorithmsWrapper {
  public:

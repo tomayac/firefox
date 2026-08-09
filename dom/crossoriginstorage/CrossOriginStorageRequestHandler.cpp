@@ -6,11 +6,11 @@
 
 #include "CrossOriginStorageChild.h"
 #include "CrossOriginStorageSinkAlgorithms.h"
+#include "CrossOriginStorageWritableFileStream.h"
 #include "mozilla/ErrorResult.h"
 #include "mozilla/dom/File.h"
 #include "mozilla/dom/Promise.h"
 #include "mozilla/dom/ScriptSettings.h"
-#include "mozilla/dom/WritableStream.h"
 #include "mozilla/ipc/BackgroundUtils.h"
 #include "nsIGlobalObject.h"
 #include "nsThreadUtils.h"
@@ -102,8 +102,8 @@ void CrossOriginStorageRequestHandler::GetWritable(
   auto algorithms =
       MakeRefPtr<CrossOriginStorageSinkAlgorithms>(global, mActor, writeId);
   ErrorResult rv;
-  RefPtr<WritableStream> stream = WritableStream::CreateNative(
-      cx, *global, *algorithms, Nothing(), nullptr, rv);
+  RefPtr<CrossOriginStorageWritableFileStream> stream =
+      CrossOriginStorageWritableFileStream::Create(cx, global, *algorithms, rv);
   if (rv.Failed()) {
     aPromise->MaybeReject(std::move(rv));
     return;

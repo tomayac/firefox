@@ -29,3 +29,15 @@ interface mixin NavigatorCrossOriginStorage {
   [SameObject, Pref="dom.crossOriginStorage.enabled"]
   readonly attribute CrossOriginStorageManager crossOriginStorage;
 };
+
+// A Phase 1-scoped stand-in for FileSystemFileHandle.createWritable()'s
+// real return type, FileSystemWritableFileStream (see
+// CrossOriginStorageRequestHandler::GetWritable() for why): adds the same
+// write(data) convenience method, without FileSystemWritableFileStream's
+// seek()/truncate(), which this phase's in-memory, capped-size writes
+// don't need.
+[Exposed=(Window,Worker), SecureContext, Pref="dom.crossOriginStorage.enabled"]
+interface CrossOriginStorageWritableFileStream : WritableStream {
+  [NewObject]
+  Promise<undefined> write(any data);
+};
