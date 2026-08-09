@@ -18,6 +18,7 @@
 #include "mozilla/dom/PBackgroundLSSimpleRequestChild.h"
 #include "mozilla/dom/PBackgroundSDBConnectionChild.h"
 #include "mozilla/dom/CookieStoreChild.h"
+#include "mozilla/dom/CrossOriginStorageChild.h"
 #include "mozilla/dom/PFileSystemRequestChild.h"
 #include "mozilla/dom/PVsync.h"
 #include "mozilla/dom/TemporaryIPCBlobChild.h"
@@ -313,6 +314,25 @@ dom::PCookieStoreChild* BackgroundChildImpl::AllocPCookieStoreChild() {
 bool BackgroundChildImpl::DeallocPCookieStoreChild(PCookieStoreChild* aActor) {
   RefPtr<dom::CookieStoreChild> child =
       dont_AddRef(static_cast<dom::CookieStoreChild*>(aActor));
+  MOZ_ASSERT(child);
+  return true;
+}
+
+// -----------------------------------------------------------------------------
+// CrossOriginStorage API
+// -----------------------------------------------------------------------------
+
+dom::PCrossOriginStorageChild*
+BackgroundChildImpl::AllocPCrossOriginStorageChild() {
+  RefPtr<dom::CrossOriginStorageChild> child =
+      new dom::CrossOriginStorageChild();
+  return child.forget().take();
+}
+
+bool BackgroundChildImpl::DeallocPCrossOriginStorageChild(
+    PCrossOriginStorageChild* aActor) {
+  RefPtr<dom::CrossOriginStorageChild> child =
+      dont_AddRef(static_cast<dom::CrossOriginStorageChild*>(aActor));
   MOZ_ASSERT(child);
   return true;
 }

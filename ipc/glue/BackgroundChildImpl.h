@@ -122,6 +122,11 @@ class BackgroundChildImpl : public PBackgroundChild {
 
   virtual bool DeallocPCookieStoreChild(PCookieStoreChild* aActor) override;
 
+  virtual PCrossOriginStorageChild* AllocPCrossOriginStorageChild() override;
+
+  virtual bool DeallocPCrossOriginStorageChild(
+      PCrossOriginStorageChild* aActor) override;
+
   virtual PServiceWorkerManagerChild* AllocPServiceWorkerManagerChild()
       override;
 

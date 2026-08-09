@@ -1,0 +1,63 @@
+/* This Source Code Form is subject to the terms of the Mozilla Public
+ * License, v. 2.0. If a copy of the MPL was not distributed with this
+ * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
+
+include protocol PBackground;
+include PBackgroundSharedTypes;
+
+namespace mozilla {
+namespace dom {
+
+// Success payload for RequestFileHandle: enough for the child to construct a
+// FileSystemFileHandle addressing the entry. `written` distinguishes a
+// "written" entry (safe to GetFile()) from a freshly created "pending" one.
+struct COSRequestFileHandleSuccess
+{
+  bool written;
+};
+
+// On failure, `result` is an nsresult the child maps to the DOMException
+// requestFileHandle() should reject with (NotFoundError / NotAllowedError).
+union COSRequestFileHandleResult
+{
+  COSRequestFileHandleSuccess;
+  nsresult;
+};
+
+// The registry backing navigator.crossOriginStorage, per
+// https://wicg.github.io/cross-origin-storage/. A single instance is shared
+// by every content process, deliberately not scoped by origin the way
+// QuotaManager's clients are -- see the architecture notes in
+// CrossOriginStorageRegistry.h.
+[ManualDealloc]
+protocol PCrossOriginStorage
+{
+  manager PBackground;
+
+parent:
+  // https://wicg.github.io/cross-origin-storage/#complete-a-read-request
+  // https://wicg.github.io/cross-origin-storage/#complete-a-create-request
+  async RequestFileHandle(nsCString algorithm, nsCString value, bool create,
+                          PrincipalInfo requestingPrincipal)
+      returns (COSRequestFileHandleResult result);
+
+  // A create-backed write session. BeginWrite establishes it for the pending
+  // entry created by a prior RequestFileHandle(create: true); WriteChunk
+  // streams the writable stream's bytes to it in order; FinishWrite runs
+  // "verify and store"; AbortWrite is the explicit-abandonment fast path
+  // (see CrossOriginStorageRegistry.h). `writeId` is a child-generated,
+  // per-actor-only token correlating these calls -- not spec-visible.
+  async BeginWrite(uint64_t writeId, nsCString algorithm, nsCString value,
+                   PrincipalInfo writingPrincipal);
+  async WriteChunk(uint64_t writeId, uint8_t[] chunk);
+  // On failure, `result` is an nsresult the child maps to the DOMException
+  // close() should reject with (currently always DataError).
+  async FinishWrite(uint64_t writeId) returns (nsresult result);
+  async AbortWrite(uint64_t writeId);
+
+child:
+  async __delete__();
+};
+
+} // namespace dom
+} // namespace mozilla

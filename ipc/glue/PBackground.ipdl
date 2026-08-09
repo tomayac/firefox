@@ -21,6 +21,7 @@ include protocol PCacheStorage;
 include protocol PCacheStreamControl;
 include protocol PClientManager;
 include protocol PCookieStore;
+include protocol PCrossOriginStorage;
 include protocol PFileSystemManager;
 include protocol PFileSystemRequest;
 include protocol PGamepadEventChannel;
@@ -100,6 +101,7 @@ sync protocol PBackground
   manages PCacheStreamControl;
   manages PClientManager;
   manages PCookieStore;
+  manages PCrossOriginStorage;
   manages PFileSystemRequest;
   manages PGamepadEventChannel;
   manages PGamepadTestChannel;
@@ -209,6 +211,8 @@ parent:
   async PBroadcastChannel(PrincipalInfo pInfo, nsCString origin, nsString channel);
 
   async PCookieStore();
+
+  async PCrossOriginStorage();
 
   async PServiceWorkerManager();
 

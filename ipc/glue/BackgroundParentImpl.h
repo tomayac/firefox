@@ -196,6 +196,11 @@ class BackgroundParentImpl : public PBackgroundParent {
 
   virtual bool DeallocPCookieStoreParent(PCookieStoreParent* aActor) override;
 
+  virtual PCrossOriginStorageParent* AllocPCrossOriginStorageParent() override;
+
+  virtual bool DeallocPCrossOriginStorageParent(
+      PCrossOriginStorageParent* aActor) override;
+
   PServiceWorkerManagerParent* AllocPServiceWorkerManagerParent() override;
 
   bool DeallocPServiceWorkerManagerParent(

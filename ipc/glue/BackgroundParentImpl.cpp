@@ -18,6 +18,7 @@
 #include "mozilla/dom/ClientValidation.h"
 #include "mozilla/dom/ContentParent.h"
 #include "mozilla/dom/CookieStoreParent.h"
+#include "mozilla/dom/CrossOriginStorageParent.h"
 #include "mozilla/dom/DOMTypes.h"
 #include "mozilla/dom/FetchParent.h"
 #include "mozilla/dom/FileCreatorParent.h"
@@ -856,6 +857,27 @@ bool BackgroundParentImpl::DeallocPCookieStoreParent(
 
   RefPtr<mozilla::dom::CookieStoreParent> actor =
       dont_AddRef(static_cast<mozilla::dom::CookieStoreParent*>(aActor));
+  return true;
+}
+
+mozilla::dom::PCrossOriginStorageParent*
+BackgroundParentImpl::AllocPCrossOriginStorageParent() {
+  AssertIsInMainProcess();
+  AssertIsOnBackgroundThread();
+
+  RefPtr<mozilla::dom::CrossOriginStorageParent> actor =
+      new mozilla::dom::CrossOriginStorageParent();
+  return actor.forget().take();
+}
+
+bool BackgroundParentImpl::DeallocPCrossOriginStorageParent(
+    PCrossOriginStorageParent* aActor) {
+  AssertIsInMainProcess();
+  AssertIsOnBackgroundThread();
+  MOZ_ASSERT(aActor);
+
+  RefPtr<mozilla::dom::CrossOriginStorageParent> actor =
+      dont_AddRef(static_cast<mozilla::dom::CrossOriginStorageParent*>(aActor));
   return true;
 }
 

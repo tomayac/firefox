@@ -6,13 +6,29 @@ with Files("**"):
     BUG_COMPONENT = ("Core", "DOM: File")
 
 EXPORTS.mozilla.dom += [
+    "CrossOriginStorageChild.h",
     "CrossOriginStorageManager.h",
+    "CrossOriginStorageParent.h",
+    "CrossOriginStorageRegistry.h",
+    "CrossOriginStorageUtils.h",
 ]
 
 UNIFIED_SOURCES += [
     "CrossOriginStorageManager.cpp",
+    "CrossOriginStorageParent.cpp",
+    "CrossOriginStorageRegistry.cpp",
+    "CrossOriginStorageUtils.cpp",
+]
+
+IPDL_SOURCES += [
+    "PCrossOriginStorage.ipdl",
 ]
 
 include("/ipc/chromium/chromium-config.mozbuild")
 
 FINAL_LIBRARY = "xul"
+
+LOCAL_INCLUDES += [
+    "/security/manager/ssl",
+    "/xpcom/build",
+]
