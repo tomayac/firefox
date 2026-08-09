@@ -5,12 +5,50 @@
 #include "CrossOriginStorageWritableFileStream.h"
 
 #include "WritableStreamDefaultWriterAbstract.h"
+#include "js/PropertyAndElement.h"
+#include "jsapi.h"
 #include "mozilla/dom/CrossOriginStorageBinding.h"
 #include "mozilla/dom/Promise.h"
+#include "mozilla/dom/ScriptSettings.h"
 #include "mozilla/dom/UnderlyingSinkCallbackHelpers.h"
 #include "mozilla/dom/WritableStreamDefaultWriter.h"
 
 namespace mozilla::dom {
+
+namespace {
+
+// Builds a plain {type, <key>: value} object -- the same discriminated
+// shape the File System Standard's own write() sink accepts
+// (https://fs.spec.whatwg.org/#dictdef-writeparams) -- so seek()/
+// truncate() can be expressed as ordinary writes through the same
+// underlying sink queue as real data, keeping them correctly serialized
+// relative to write() calls. See
+// CrossOriginStorageSinkAlgorithms::WriteCallbackImpl for the other end.
+bool MakeCommandObject(JSContext* aCx, const char* aType, const char* aKey,
+                       uint64_t aValue, JS::MutableHandle<JS::Value> aOut) {
+  JS::Rooted<JSObject*> obj(aCx, JS_NewPlainObject(aCx));
+  if (!obj) {
+    return false;
+  }
+  JS::Rooted<JS::Value> typeVal(aCx);
+  JSString* typeStr = JS_NewStringCopyZ(aCx, aType);
+  if (!typeStr) {
+    return false;
+  }
+  typeVal.setString(typeStr);
+  if (!JS_DefineProperty(aCx, obj, "type", typeVal, JSPROP_ENUMERATE)) {
+    return false;
+  }
+  JS::Rooted<JS::Value> value(aCx);
+  value.setNumber(static_cast<double>(aValue));
+  if (!JS_DefineProperty(aCx, obj, aKey, value, JSPROP_ENUMERATE)) {
+    return false;
+  }
+  aOut.setObject(*obj);
+  return true;
+}
+
+}  // namespace
 
 CrossOriginStorageWritableFileStream::CrossOriginStorageWritableFileStream(
     nsIGlobalObject* aGlobal)
@@ -56,6 +94,42 @@ already_AddRefed<Promise> CrossOriginStorageWritableFileStream::Write(
 
   // Step 4: return result.
   return result.forget();
+}
+
+// https://fs.spec.whatwg.org/#dom-filesystemwritablefilestream-seek
+already_AddRefed<Promise> CrossOriginStorageWritableFileStream::Seek(
+    uint64_t aPosition, ErrorResult& aRv) {
+  AutoJSAPI jsapi;
+  if (!jsapi.Init(GetParentObject())) {
+    aRv.ThrowUnknownError("Internal error");
+    return nullptr;
+  }
+  JSContext* cx = jsapi.cx();
+
+  JS::Rooted<JS::Value> command(cx);
+  if (!MakeCommandObject(cx, "seek", "position", aPosition, &command)) {
+    aRv.StealExceptionFromJSContext(cx);
+    return nullptr;
+  }
+  return Write(cx, command, aRv);
+}
+
+// https://fs.spec.whatwg.org/#dom-filesystemwritablefilestream-truncate
+already_AddRefed<Promise> CrossOriginStorageWritableFileStream::Truncate(
+    uint64_t aSize, ErrorResult& aRv) {
+  AutoJSAPI jsapi;
+  if (!jsapi.Init(GetParentObject())) {
+    aRv.ThrowUnknownError("Internal error");
+    return nullptr;
+  }
+  JSContext* cx = jsapi.cx();
+
+  JS::Rooted<JS::Value> command(cx);
+  if (!MakeCommandObject(cx, "truncate", "size", aSize, &command)) {
+    aRv.StealExceptionFromJSContext(cx);
+    return nullptr;
+  }
+  return Write(cx, command, aRv);
 }
 
 }  // namespace mozilla::dom

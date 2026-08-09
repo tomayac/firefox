@@ -33,11 +33,15 @@ interface mixin NavigatorCrossOriginStorage {
 // A Phase 1-scoped stand-in for FileSystemFileHandle.createWritable()'s
 // real return type, FileSystemWritableFileStream (see
 // CrossOriginStorageRequestHandler::GetWritable() for why): adds the same
-// write(data) convenience method, without FileSystemWritableFileStream's
-// seek()/truncate(), which this phase's in-memory, capped-size writes
-// don't need.
+// write(data)/seek(position)/truncate(size) convenience methods, without
+// that class's real disk-backed RandomAccessStreamParams machinery, which
+// this phase's in-memory, capped-size writes don't need.
 [Exposed=(Window,Worker), SecureContext, Pref="dom.crossOriginStorage.enabled"]
 interface CrossOriginStorageWritableFileStream : WritableStream {
   [NewObject]
   Promise<undefined> write(any data);
+  [NewObject]
+  Promise<undefined> seek(unsigned long long position);
+  [NewObject]
+  Promise<undefined> truncate(unsigned long long size);
 };

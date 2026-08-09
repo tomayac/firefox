@@ -5,6 +5,9 @@
 #include "CrossOriginStorageSinkAlgorithms.h"
 
 #include "CrossOriginStorageChild.h"
+#include "js/ArrayBuffer.h"
+#include "js/PropertyAndElement.h"
+#include "js/experimental/TypedData.h"
 #include "mozilla/dom/BindingUtils.h"
 #include "mozilla/dom/Blob.h"
 #include "mozilla/dom/BlobBinding.h"
@@ -39,8 +42,6 @@ already_AddRefed<Promise> CrossOriginStorageSinkAlgorithms::WriteCallbackImpl(
     return promise.forget();
   }
 
-  nsTArray<uint8_t> bytes;
-
   RefPtr<Blob> blob;
   if (aChunk.isObject() &&
       NS_SUCCEEDED(UNWRAP_OBJECT(Blob, &aChunk.toObject(), blob))) {
@@ -57,29 +58,89 @@ already_AddRefed<Promise> CrossOriginStorageSinkAlgorithms::WriteCallbackImpl(
       promise->MaybeReject(drv);
       return promise.forget();
     }
+    nsTArray<uint8_t> bytes;
     bytes.AppendElements(reinterpret_cast<const uint8_t*>(data.get()),
                          data.Length());
-  } else if (aChunk.isString()) {
+    (void)mActor->SendWriteChunk(mWriteId, std::move(bytes));
+    promise->MaybeResolveWithUndefined();
+    return promise.forget();
+  }
+
+  if (aChunk.isObject()) {
+    JS::Rooted<JSObject*> obj(aCx, &aChunk.toObject());
+
+    size_t length = 0;
+    uint8_t* data = nullptr;
+    if (JS::GetObjectAsArrayBuffer(obj, &length, &data)) {
+      nsTArray<uint8_t> bytes;
+      bytes.AppendElements(data, length);
+      (void)mActor->SendWriteChunk(mWriteId, std::move(bytes));
+      promise->MaybeResolveWithUndefined();
+      return promise.forget();
+    }
+
+    bool isSharedMemory = false;
+    if (JS_GetObjectAsArrayBufferView(obj, &length, &isSharedMemory, &data)) {
+      nsTArray<uint8_t> bytes;
+      bytes.AppendElements(data, length);
+      (void)mActor->SendWriteChunk(mWriteId, std::move(bytes));
+      promise->MaybeResolveWithUndefined();
+      return promise.forget();
+    }
+
+    // A synthesized {type: "seek"|"truncate", ...} command object from
+    // CrossOriginStorageWritableFileStream::Seek()/Truncate() -- checked
+    // last among object shapes, since unlike the exact-class checks above
+    // this is just a property read, and a Blob (also isObject()) would
+    // already have been handled above.
+    JS::Rooted<JS::Value> typeVal(aCx);
+    if (!JS_GetProperty(aCx, obj, "type", &typeVal)) {
+      JS_ClearPendingException(aCx);
+    } else if (typeVal.isString()) {
+      nsAutoJSString type;
+      if (type.init(aCx, typeVal)) {
+        if (type.EqualsLiteral("seek")) {
+          JS::Rooted<JS::Value> positionVal(aCx);
+          if (JS_GetProperty(aCx, obj, "position", &positionVal) &&
+              positionVal.isNumber()) {
+            (void)mActor->SendSeek(
+                mWriteId, static_cast<uint64_t>(positionVal.toNumber()));
+            promise->MaybeResolveWithUndefined();
+            return promise.forget();
+          }
+        } else if (type.EqualsLiteral("truncate")) {
+          JS::Rooted<JS::Value> sizeVal(aCx);
+          if (JS_GetProperty(aCx, obj, "size", &sizeVal) &&
+              sizeVal.isNumber()) {
+            (void)mActor->SendTruncate(
+                mWriteId, static_cast<uint64_t>(sizeVal.toNumber()));
+            promise->MaybeResolveWithUndefined();
+            return promise.forget();
+          }
+        }
+      }
+      JS_ClearPendingException(aCx);
+    }
+  }
+
+  if (aChunk.isString()) {
     nsAutoJSString str;
     if (!str.init(aCx, aChunk)) {
       promise->MaybeRejectWithTypeError("Invalid chunk");
       return promise.forget();
     }
     NS_ConvertUTF16toUTF8 utf8(str);
+    nsTArray<uint8_t> bytes;
     bytes.AppendElements(reinterpret_cast<const uint8_t*>(utf8.get()),
                          utf8.Length());
-  } else {
-    // Phase 1 limitation: every write() call in this feature's WPT suite
-    // passes a Blob or a string; ArrayBuffer/ArrayBufferView chunks (which
-    // the real FileSystemWritableFileStream.write() also accepts) are
-    // follow-up work.
-    promise->MaybeRejectWithTypeError(
-        "Unsupported chunk type: expected a Blob or a string");
+    (void)mActor->SendWriteChunk(mWriteId, std::move(bytes));
+    promise->MaybeResolveWithUndefined();
     return promise.forget();
   }
 
-  (void)mActor->SendWriteChunk(mWriteId, std::move(bytes));
-  promise->MaybeResolveWithUndefined();
+  promise->MaybeRejectWithTypeError(
+      "Unsupported chunk type: expected a Blob, ArrayBuffer, "
+      "ArrayBufferView, or a string");
   return promise.forget();
 }
 

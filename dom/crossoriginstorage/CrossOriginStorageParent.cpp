@@ -5,6 +5,7 @@
 #include "CrossOriginStorageParent.h"
 
 #include "CrossOriginStorageRegistry.h"
+#include "mozilla/PodOperations.h"
 #include "mozilla/ipc/BackgroundParent.h"
 #include "nsString.h"
 
@@ -109,7 +110,44 @@ mozilla::ipc::IPCResult CrossOriginStorageParent::RecvWriteChunk(
   if (!session) {
     return IPC_OK();
   }
-  session->mBytes.AppendElements(aChunk);
+
+  // Positioned write: extends and zero-fills up to mPosition first if the
+  // cursor was moved past the current end by a prior Seek (nsTArray::
+  // SetLength value-initializes new elements -- zero for uint8_t).
+  uint64_t endPosition = session->mPosition + aChunk.Length();
+  if (endPosition > session->mBytes.Length()) {
+    session->mBytes.SetLength(endPosition);
+  }
+  PodCopy(session->mBytes.Elements() + session->mPosition, aChunk.Elements(),
+          aChunk.Length());
+  session->mPosition = endPosition;
+  return IPC_OK();
+}
+
+mozilla::ipc::IPCResult CrossOriginStorageParent::RecvSeek(uint64_t aWriteId,
+                                                           uint64_t aPosition) {
+  mozilla::ipc::AssertIsOnBackgroundThread();
+
+  WriteSession* session = mWriteSessions.Get(aWriteId);
+  if (!session) {
+    return IPC_OK();
+  }
+  session->mPosition = aPosition;
+  return IPC_OK();
+}
+
+mozilla::ipc::IPCResult CrossOriginStorageParent::RecvTruncate(
+    uint64_t aWriteId, uint64_t aSize) {
+  mozilla::ipc::AssertIsOnBackgroundThread();
+
+  WriteSession* session = mWriteSessions.Get(aWriteId);
+  if (!session) {
+    return IPC_OK();
+  }
+  session->mBytes.SetLength(aSize);
+  if (session->mPosition > aSize) {
+    session->mPosition = aSize;
+  }
   return IPC_OK();
 }
 

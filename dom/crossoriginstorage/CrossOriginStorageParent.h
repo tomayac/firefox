@@ -50,6 +50,10 @@ class CrossOriginStorageParent final : public PCrossOriginStorageParent {
   mozilla::ipc::IPCResult RecvWriteChunk(uint64_t aWriteId,
                                          nsTArray<uint8_t>&& aChunk);
 
+  mozilla::ipc::IPCResult RecvSeek(uint64_t aWriteId, uint64_t aPosition);
+
+  mozilla::ipc::IPCResult RecvTruncate(uint64_t aWriteId, uint64_t aSize);
+
   mozilla::ipc::IPCResult RecvFinishWrite(uint64_t aWriteId,
                                           FinishWriteResolver&& aResolve);
 
@@ -68,6 +72,10 @@ class CrossOriginStorageParent final : public PCrossOriginStorageParent {
     // COSRequestedOriginsValue only at FinishWrite time.
     COSRequestedOrigins mRequestedOrigins;
     nsTArray<uint8_t> mBytes;
+    // The stream's current write cursor -- advanced by WriteChunk, moved
+    // directly by Seek, and clamped by Truncate. Defaults to the start, per
+    // the File System Standard's createWritable() (no keepExistingData).
+    uint64_t mPosition = 0;
   };
 
   nsClassHashtable<nsUint64HashKey, WriteSession> mWriteSessions;

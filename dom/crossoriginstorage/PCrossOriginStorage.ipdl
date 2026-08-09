@@ -81,6 +81,11 @@ parent:
                    PrincipalInfo writingPrincipal,
                    COSRequestedOrigins requestedOrigins);
   async WriteChunk(uint64_t writeId, uint8_t[] chunk);
+  // File System Standard stream-position control, generically supported by
+  // the underlying write-command queue even though COS's own spec never
+  // calls them directly; see filesystemwritablefilestream-verify WPT.
+  async Seek(uint64_t writeId, uint64_t position);
+  async Truncate(uint64_t writeId, uint64_t size);
   // On failure, `result` is an nsresult the child maps to the DOMException
   // close() should reject with (currently always DataError).
   async FinishWrite(uint64_t writeId) returns (nsresult result);

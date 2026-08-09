@@ -14,14 +14,14 @@ class UnderlyingSinkAlgorithmsWrapper;
 // https://wicg.github.io/cross-origin-storage/#creating-and-writing-files
 // A minimal, Phase 1-scoped stand-in for FileSystemWritableFileStream (see
 // CrossOriginStorageRequestHandler::GetWritable() for the full reasoning):
-// adds just the write(data) convenience method the File System Standard's
-// FileSystemWritableFileStream has, implemented the same way that spec
-// defines it -- acquire a writer, write, release the writer -- on top of
-// the same native UnderlyingSinkAlgorithmsWrapper machinery the base
-// WritableStream already provides. Deliberately omits
-// FileSystemWritableFileStream's seek()/truncate() and its real
-// disk-backed RandomAccessStreamParams machinery, neither of which this
-// phase's in-memory, capped-size writes need.
+// adds the write(data)/seek(position)/truncate(size) convenience methods
+// the File System Standard's FileSystemWritableFileStream has, each
+// implemented the same way that spec defines them -- acquire a writer,
+// write a (possibly synthesized, for seek/truncate) command value, release
+// the writer -- on top of the same native UnderlyingSinkAlgorithmsWrapper
+// machinery the base WritableStream already provides. Deliberately omits
+// FileSystemWritableFileStream's real disk-backed RandomAccessStreamParams
+// machinery, which this phase's in-memory, capped-size writes don't need.
 class CrossOriginStorageWritableFileStream final : public WritableStream {
  public:
   static already_AddRefed<CrossOriginStorageWritableFileStream> Create(
@@ -34,6 +34,14 @@ class CrossOriginStorageWritableFileStream final : public WritableStream {
   // https://fs.spec.whatwg.org/#dom-filesystemwritablefilestream-write
   MOZ_CAN_RUN_SCRIPT already_AddRefed<Promise> Write(
       JSContext* aCx, JS::Handle<JS::Value> aData, ErrorResult& aRv);
+
+  // https://fs.spec.whatwg.org/#dom-filesystemwritablefilestream-seek
+  MOZ_CAN_RUN_SCRIPT already_AddRefed<Promise> Seek(uint64_t aPosition,
+                                                    ErrorResult& aRv);
+
+  // https://fs.spec.whatwg.org/#dom-filesystemwritablefilestream-truncate
+  MOZ_CAN_RUN_SCRIPT already_AddRefed<Promise> Truncate(uint64_t aSize,
+                                                        ErrorResult& aRv);
 
  private:
   explicit CrossOriginStorageWritableFileStream(nsIGlobalObject* aGlobal);
