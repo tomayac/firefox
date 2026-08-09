@@ -57,7 +57,8 @@ mozilla::ipc::IPCResult CrossOriginStorageParent::RecvRequestFileHandle(
 
   if (aCreate) {
     // https://wicg.github.io/cross-origin-storage/#complete-a-create-request
-    bool written = registry.CompleteCreateRequest(*algorithm, aValue);
+    bool written = registry.CompleteCreateRequest(*algorithm, aValue,
+                                                  aRequestingPrincipal);
     COSRequestFileHandleSuccess success;
     success.written() = written;
     COSRequestFileHandleResult result;

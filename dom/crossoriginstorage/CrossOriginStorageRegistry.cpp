@@ -4,7 +4,12 @@
 
 #include "CrossOriginStorageRegistry.h"
 
+#include <algorithm>
+
+#include "CrossOriginStoragePublicHashList.h"
+#include "CrossOriginStorageRateLimiter.h"
 #include "mozilla/ipc/BackgroundParent.h"
+#include "prtime.h"
 
 namespace mozilla::dom {
 
@@ -16,6 +21,16 @@ namespace {
 // value for reclaiming a write abandoned without an explicit close()/
 // abort() -- e.g. a page that navigates away or crashes mid-write.
 const TimeDuration kPendingStalenessTimeout = TimeDuration::FromSeconds(5 * 60);
+
+// Matches Ladybird's own chosen split: a global budget of 60% of disk
+// capacity, and a per-origin share of 20% of *that* (not of raw disk
+// capacity). kMaxGlobalBudget is a sanity ceiling guarding against a
+// misreported disk capacity producing an unreasonably large budget --
+// the same defensive pattern QuotaManager's own budget computation uses
+// (see dom/quota/ActorsParent.cpp).
+constexpr double kGlobalBudgetFraction = 0.6;
+constexpr double kPerOriginBudgetFraction = 0.2;
+constexpr int64_t kMaxGlobalBudget = 100LL * 1024 * 1024 * 1024;  // 100 GiB
 
 // This, and GetSite() below, work directly off the wire-format
 // PrincipalInfo rather than constructing a real nsIPrincipal via
@@ -93,6 +108,10 @@ nsAutoCString CrossOriginStorageRegistry::MakeKey(COSHashAlgorithm aAlgorithm,
   return key;
 }
 
+CrossOriginStorageRegistry::CrossOriginStorageRegistry() {
+  LoadPersistedEntries();
+}
+
 /* static */
 CrossOriginStorageRegistry& CrossOriginStorageRegistry::GetOrCreate() {
   mozilla::ipc::AssertIsOnBackgroundThread();
@@ -100,11 +119,60 @@ CrossOriginStorageRegistry& CrossOriginStorageRegistry::GetOrCreate() {
   return sInstance;
 }
 
+void CrossOriginStorageRegistry::LoadPersistedEntries() {
+  CrossOriginStoragePersistence* persistence =
+      CrossOriginStoragePersistence::GetOrCreate();
+  if (!persistence) {
+    return;
+  }
+
+  nsTArray<CrossOriginStoragePersistence::PersistedEntry> persisted;
+  persistence->ScanPersistedEntries(persisted);
+
+  for (auto& p : persisted) {
+    Maybe<COSHashAlgorithm> algorithm =
+        ParseHashAlgorithm(NS_ConvertUTF8toUTF16(p.mAlgorithm));
+    if (!algorithm) {
+      continue;  // Written by a future version with a new algorithm this
+                 // build doesn't recognize; skip rather than guess.
+    }
+
+    nsAutoCString key = MakeKey(*algorithm, p.mValue);
+    Entry* entry = mEntries.GetOrInsertNew(key);
+    entry->mState = Entry::State::Written;
+    entry->mScope.mKind = static_cast<Scope::Kind>(p.mScopeKind);
+    entry->mScope.mList = p.mScopeList.Clone();
+    entry->mStoringOrigins = p.mStoringOrigins.Clone();
+    entry->mStoringSites = p.mStoringSites.Clone();
+    entry->mByteSize = p.mByteSize;
+    entry->mLastReadTime = p.mLastReadTime;
+    entry->mBytesOnDisk = true;
+
+    mTotalBytesUsed += p.mByteSize;
+    if (!p.mStoringOrigins.IsEmpty()) {
+      uint64_t* usage = mOriginUsage.GetOrInsertNew(p.mStoringOrigins[0]);
+      *usage += p.mByteSize;
+    }
+  }
+}
+
 CrossOriginStorageRegistry::ReadOutcome
 CrossOriginStorageRegistry::CompleteReadRequest(
     COSHashAlgorithm aAlgorithm, const nsACString& aValue,
     const PrincipalInfo& aRequestingPrincipal) {
   mozilla::ipc::AssertIsOnBackgroundThread();
+
+  // Rate limiting is checked before anything else, and a rejection here
+  // is NotFound -- the same outcome a genuine miss produces -- so a
+  // rate-limited probe can't be distinguished from an ordinary one.
+  nsAutoCString requestingOrigin;
+  bool haveOrigin =
+      NS_SUCCEEDED(GetOrigin(aRequestingPrincipal, requestingOrigin));
+  if (haveOrigin &&
+      !CrossOriginStorageRateLimiter::GetOrCreate().TryConsume(
+          requestingOrigin, CrossOriginStorageRateLimiter::Kind::Read)) {
+    return ReadOutcome::NotFound;
+  }
 
   nsAutoCString key = MakeKey(aAlgorithm, aValue);
 
@@ -125,57 +193,74 @@ CrossOriginStorageRegistry::CompleteReadRequest(
 
   // https://wicg.github.io/cross-origin-storage/#determine-cos-disclosure
   // and https://wicg.github.io/cross-origin-storage/#apply-availability-gating
-  // (minus the Public Hash List / GREASE'ing gate for wildcard-scoped
-  // entries -- see the Phase 1 limitations note in
-  // CrossOriginStorageRegistry.h).
 
   // Step 3: original storer access, independent of scope.
-  nsAutoCString requestingOrigin;
-  bool haveOrigin =
-      NS_SUCCEEDED(GetOrigin(aRequestingPrincipal, requestingOrigin));
+  bool found = false;
   if (haveOrigin && entry->mStoringOrigins.Contains(requestingOrigin)) {
-    return ReadOutcome::Found;
+    found = true;
+  } else {
+    switch (entry->mScope.mKind) {
+      case Scope::Kind::Wildcard:
+        // Step 4: the Public Hash List gate, or (independently) a
+        // GREASE'd roll -- see CrossOriginStoragePublicHashList.h.
+        found =
+            CrossOriginStoragePublicHashList::Contains(aAlgorithm, aValue) ||
+            CrossOriginStorageGrease::ShouldDisclose(entry->mByteSize);
+        break;
+
+      case Scope::Kind::List: {
+        // Step 5.
+        if (haveOrigin) {
+          int32_t index = entry->mScope.mList.IndexOf(requestingOrigin);
+          if (index >= 0) {
+            // Implementation notes §4: a successful read by a listed
+            // origin refreshes its LRU recency (move to the
+            // most-recently-used end); merely re-declaring it in a later
+            // write does not.
+            entry->mScope.mList.RemoveElementAt(index);
+            entry->mScope.mList.AppendElement(requestingOrigin);
+            found = true;
+          }
+        }
+        break;
+      }
+
+      case Scope::Kind::SameSiteOnly: {
+        // Step 7.
+        nsAutoCString requestingSite;
+        if (NS_SUCCEEDED(GetSite(aRequestingPrincipal, requestingSite)) &&
+            entry->mStoringSites.Contains(requestingSite)) {
+          found = true;
+        }
+        break;
+      }
+    }
   }
 
-  switch (entry->mScope.mKind) {
-    case Scope::Kind::Wildcard:
-      // Step 4 (PHL/GREASE'ing gate not yet implemented; see above).
-      return ReadOutcome::Found;
-
-    case Scope::Kind::List: {
-      // Step 5.
-      if (!haveOrigin) {
-        return ReadOutcome::NotFound;
-      }
-      int32_t index = entry->mScope.mList.IndexOf(requestingOrigin);
-      if (index < 0) {
-        return ReadOutcome::NotFound;
-      }
-      // Implementation notes §4: a successful read by a listed origin
-      // refreshes its LRU recency (move to the most-recently-used end);
-      // merely re-declaring it in a later write does not.
-      entry->mScope.mList.RemoveElementAt(index);
-      entry->mScope.mList.AppendElement(requestingOrigin);
-      return ReadOutcome::Found;
-    }
-
-    case Scope::Kind::SameSiteOnly: {
-      // Step 7.
-      nsAutoCString requestingSite;
-      if (NS_FAILED(GetSite(aRequestingPrincipal, requestingSite))) {
-        return ReadOutcome::NotFound;
-      }
-      return entry->mStoringSites.Contains(requestingSite)
-                 ? ReadOutcome::Found
-                 : ReadOutcome::NotFound;
-    }
+  if (!found) {
+    return ReadOutcome::NotFound;
   }
-  return ReadOutcome::NotFound;
+  entry->mLastReadTime = PR_Now();
+  return ReadOutcome::Found;
 }
 
 bool CrossOriginStorageRegistry::CompleteCreateRequest(
-    COSHashAlgorithm aAlgorithm, const nsACString& aValue) {
+    COSHashAlgorithm aAlgorithm, const nsACString& aValue,
+    const PrincipalInfo& aWritingPrincipal) {
   mozilla::ipc::AssertIsOnBackgroundThread();
+
+  nsAutoCString writingOrigin;
+  bool haveOrigin = NS_SUCCEEDED(GetOrigin(aWritingPrincipal, writingOrigin));
+  if (haveOrigin &&
+      !CrossOriginStorageRateLimiter::GetOrCreate().TryConsume(
+          writingOrigin, CrossOriginStorageRateLimiter::Kind::Write)) {
+    // Silently refuse to create/touch any entry, and report "not written"
+    // -- identical to an ordinary fresh pending creation's return value.
+    // The eventual close() for this write will find no entry and fail
+    // generically, rather than this request immediately surfacing a
+    // distinguishable "you are rate limited" signal.
+    return false;
+  }
 
   nsAutoCString key = MakeKey(aAlgorithm, aValue);
 
@@ -226,12 +311,15 @@ nsresult CrossOriginStorageRegistry::VerifyAndStore(
   }
 
   // Step 3.
-  entry->mBytes = aBytes.Clone();
+  bool wasAlreadyWritten = entry->mState == Entry::State::Written;
   entry->mState = Entry::State::Written;
+  entry->mByteSize = aBytes.Length();
+  entry->mLastReadTime = PR_Now();
 
   nsAutoCString writingOrigin;
-  if (NS_SUCCEEDED(GetOrigin(aWritingPrincipal, writingOrigin)) &&
-      !entry->mStoringOrigins.Contains(writingOrigin)) {
+  bool haveWritingOrigin =
+      NS_SUCCEEDED(GetOrigin(aWritingPrincipal, writingOrigin));
+  if (haveWritingOrigin && !entry->mStoringOrigins.Contains(writingOrigin)) {
     entry->mStoringOrigins.AppendElement(writingOrigin);
   }
   nsAutoCString writingSite;
@@ -245,6 +333,44 @@ nsresult CrossOriginStorageRegistry::VerifyAndStore(
   }
 
   UpgradeResourceVisibility(*entry, aRequestedOrigins);
+
+  // Persist to disk (bytes plus the final, post-upgrade metadata). Falls
+  // back to keeping the bytes resident in memory -- Phase 1's original
+  // behavior -- if persistence is unavailable or the write itself fails.
+  CrossOriginStoragePersistence* persistence =
+      CrossOriginStoragePersistence::GetOrCreate();
+  bool persisted = false;
+  if (persistence) {
+    CrossOriginStoragePersistence::PersistedEntry meta;
+    meta.mAlgorithm = CanonicalHashAlgorithmName(aAlgorithm);
+    meta.mValue = aValue;
+    meta.mScopeKind = static_cast<uint32_t>(entry->mScope.mKind);
+    meta.mScopeList = entry->mScope.mList.Clone();
+    meta.mStoringOrigins = entry->mStoringOrigins.Clone();
+    meta.mStoringSites = entry->mStoringSites.Clone();
+    meta.mByteSize = entry->mByteSize;
+    meta.mLastReadTime = entry->mLastReadTime;
+    persisted = persistence->WriteEntry(aAlgorithm, aValue, aBytes, meta);
+  }
+  if (persisted) {
+    entry->mBytesOnDisk = true;
+    entry->mBytes.Clear();
+  } else {
+    entry->mBytesOnDisk = false;
+    entry->mBytes = aBytes.Clone();
+  }
+
+  if (!wasAlreadyWritten) {
+    mTotalBytesUsed += entry->mByteSize;
+    if (haveWritingOrigin) {
+      uint64_t* usage = mOriginUsage.GetOrInsertNew(writingOrigin);
+      *usage += entry->mByteSize;
+    }
+  }
+
+  if (haveWritingOrigin) {
+    EnforceStorageBudget(key, writingOrigin);
+  }
 
   return NS_OK;
 }
@@ -289,6 +415,134 @@ void CrossOriginStorageRegistry::UpgradeResourceVisibility(
   }
 }
 
+void CrossOriginStorageRegistry::EvictEntry(const nsACString& aKey,
+                                            Entry& aEntry,
+                                            COSHashAlgorithm aAlgorithm,
+                                            const nsACString& aValue) {
+  mTotalBytesUsed -= std::min(mTotalBytesUsed, aEntry.mByteSize);
+  if (!aEntry.mStoringOrigins.IsEmpty()) {
+    uint64_t* usage = mOriginUsage.Get(aEntry.mStoringOrigins[0]);
+    if (usage) {
+      *usage -= std::min(*usage, aEntry.mByteSize);
+    }
+  }
+  if (aEntry.mBytesOnDisk) {
+    if (CrossOriginStoragePersistence* persistence =
+            CrossOriginStoragePersistence::GetOrCreate()) {
+      persistence->DeleteEntry(aAlgorithm, aValue);
+    }
+  }
+  mEntries.Remove(aKey);
+}
+
+void CrossOriginStorageRegistry::EnforceStorageBudget(
+    const nsACString& aJustWrittenKey, const nsACString& aWritingOrigin) {
+  CrossOriginStoragePersistence* persistence =
+      CrossOriginStoragePersistence::GetOrCreate();
+  if (!persistence) {
+    return;  // No disk capacity to compute a budget from; matches Phase
+             // 1's original unlimited-in-memory behavior.
+  }
+  int64_t diskCapacity = persistence->GetDiskCapacity();
+  if (diskCapacity <= 0) {
+    return;
+  }
+  int64_t globalBudget =
+      std::min(static_cast<int64_t>(diskCapacity * kGlobalBudgetFraction),
+               kMaxGlobalBudget);
+  if (globalBudget <= 0) {
+    return;
+  }
+  uint64_t perOriginBudget =
+      static_cast<uint64_t>(globalBudget * kPerOriginBudgetFraction);
+
+  // Collect every other Written entry's key/owner/size/recency once; both
+  // eviction passes below select from this same snapshot. Deliberately a
+  // full-table scan and sort -- see the Phase 1 limitations note in the
+  // header for the real, incremental design this should become.
+  struct Candidate {
+    nsCString mKey;
+    COSHashAlgorithm mAlgorithm;
+    nsCString mValue;
+    nsCString mOwner;  // Empty if this entry has no attributed owner.
+    int64_t mLastReadTime;
+  };
+  nsTArray<Candidate> candidates;
+  for (auto iter = mEntries.Iter(); !iter.Done(); iter.Next()) {
+    if (iter.Key().Equals(aJustWrittenKey)) {
+      continue;  // Never evict the entry that was just written.
+    }
+    Entry* entry = iter.Data().get();
+    if (entry->mState != Entry::State::Written) {
+      continue;
+    }
+    Candidate& c = *candidates.AppendElement();
+    c.mKey = iter.Key();
+    // The key is "<algorithm>:<value>"; split it back apart rather than
+    // storing algorithm/value redundantly on every Entry.
+    int32_t colon = c.mKey.Find(":");
+    nsAutoCString algorithmName(
+        Substring(c.mKey, 0, colon < 0 ? 0 : static_cast<uint32_t>(colon)));
+    Maybe<COSHashAlgorithm> algorithm =
+        ParseHashAlgorithm(NS_ConvertUTF8toUTF16(algorithmName));
+    c.mAlgorithm = algorithm.valueOr(COSHashAlgorithm::SHA256);
+    c.mValue =
+        colon < 0 ? EmptyCString() : nsCString(Substring(c.mKey, colon + 1));
+    if (!entry->mStoringOrigins.IsEmpty()) {
+      c.mOwner = entry->mStoringOrigins[0];
+    }
+    c.mLastReadTime = entry->mLastReadTime;
+  }
+  candidates.Sort([](const Candidate& a, const Candidate& b) {
+    return a.mLastReadTime < b.mLastReadTime   ? -1
+           : a.mLastReadTime > b.mLastReadTime ? 1
+                                               : 0;
+  });
+
+  // Pass 1: if the writing origin is now over its own share, evict its
+  // own sole-owned entries (oldest-read first) first, before touching any
+  // other origin's entries at all.
+  uint64_t* originUsage = mOriginUsage.Get(aWritingOrigin);
+  if (originUsage && *originUsage > perOriginBudget) {
+    uint64_t toFree = *originUsage - perOriginBudget;
+    for (const Candidate& c : candidates) {
+      if (toFree == 0) {
+        break;
+      }
+      if (!c.mOwner.Equals(aWritingOrigin)) {
+        continue;
+      }
+      Entry* entry = mEntries.Get(c.mKey);
+      if (!entry) {
+        continue;
+      }
+      uint64_t size = entry->mByteSize;
+      EvictEntry(c.mKey, *entry, c.mAlgorithm, c.mValue);
+      toFree -= std::min(toFree, size);
+    }
+  }
+
+  // Pass 2: if still over the global cap (this origin's own eviction
+  // above may not have been enough, or the pressure came from other
+  // origins entirely), evict any entry, oldest-read first, regardless of
+  // owner.
+  if (mTotalBytesUsed > static_cast<uint64_t>(globalBudget)) {
+    uint64_t toFree = mTotalBytesUsed - static_cast<uint64_t>(globalBudget);
+    for (const Candidate& c : candidates) {
+      if (toFree == 0) {
+        break;
+      }
+      Entry* entry = mEntries.Get(c.mKey);
+      if (!entry) {
+        continue;  // Already evicted in pass 1.
+      }
+      uint64_t size = entry->mByteSize;
+      EvictEntry(c.mKey, *entry, c.mAlgorithm, c.mValue);
+      toFree -= std::min(toFree, size);
+    }
+  }
+}
+
 void CrossOriginStorageRegistry::ReleaseOutstandingWriter(
     COSHashAlgorithm aAlgorithm, const nsACString& aValue) {
   mozilla::ipc::AssertIsOnBackgroundThread();
@@ -329,8 +583,21 @@ CrossOriginStorageRegistry::GetFileBytes(COSHashAlgorithm aAlgorithm,
     return ReadOutcome::Pending;
   }
 
-  aOutBytes = entry->mBytes.Clone();
-  return ReadOutcome::Found;
+  if (!entry->mBytesOnDisk) {
+    aOutBytes = entry->mBytes.Clone();
+    return ReadOutcome::Found;
+  }
+
+  CrossOriginStoragePersistence* persistence =
+      CrossOriginStoragePersistence::GetOrCreate();
+  if (persistence && persistence->ReadBytes(aAlgorithm, aValue, aOutBytes)) {
+    return ReadOutcome::Found;
+  }
+
+  // Metadata says Written but the bytes are reachable nowhere (disk read
+  // failed, e.g. removed out from under us) -- treat as not found rather
+  // than returning a Found result with no actual content.
+  return ReadOutcome::NotFound;
 }
 
 }  // namespace mozilla::dom

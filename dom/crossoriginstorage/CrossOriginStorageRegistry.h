@@ -5,6 +5,7 @@
 #ifndef mozilla_dom_CrossOriginStorageRegistry_h
 #define mozilla_dom_CrossOriginStorageRegistry_h
 
+#include "CrossOriginStoragePersistence.h"
 #include "CrossOriginStorageUtils.h"
 #include "mozilla/TimeStamp.h"
 #include "mozilla/ipc/PBackgroundSharedTypes.h"
@@ -34,21 +35,29 @@ namespace mozilla::dom {
 // genuinely multi-threaded access pattern this implementation doesn't
 // have).
 //
+// Persistence: `written` entries are flushed to disk via
+// CrossOriginStoragePersistence as part of VerifyAndStore, and reloaded
+// (metadata only -- bytes are read back lazily, per GetFileBytes) at
+// construction time. `pending` entries are never persisted; losing an
+// in-flight write across a crash/restart is acceptable, matches every
+// other implementation's own choice, and avoids needing crash-recovery
+// for partial writes at all. If persistence is unavailable in this
+// process (no profile, e.g.), the registry silently falls back to this
+// phase's original in-memory-only behavior rather than failing the
+// feature outright.
+//
 // Phase 1 limitations, tracked as explicit follow-up work rather than
 // silently skipped:
-// - Entries are in-memory only (lost on restart); no on-disk persistence.
-// - Wildcard-scoped entries are disclosed to every requesting origin
-//   unconditionally: the Public Hash List gate and GREASE'ing
-//   (https://wicg.github.io/cross-origin-storage/#availability-gating),
-//   both of which existing implementations treat as load-bearing privacy
-//   mechanisms for the wildcard case specifically, don't exist yet. This
-//   is a real, deliberate gap -- acceptable for a disabled-by-default,
-//   unshipped local build, not for anything further along.
-// - No rate limiting, and no real storage-budget/eviction accounting -- a
-//   single write session is capped at a flat 4 GiB ceiling
-//   (CrossOriginStorageParent.cpp's kMaxCOSWriteBytes, matching Servo's and
-//   Ladybird's own starting point) purely to bound worst-case memory use,
-//   not as a substitute for real per-origin/global budget tracking.
+// - Storage-budget eviction (EnforceStorageBudget below) is a naive O(n
+//   log n) full-entry-list sort on every write that might need to evict,
+//   not the incremental O(1) usage-tracking / O(log n) eviction-index
+//   design a real implementation needs at scale.
+// - The Public Hash List (CrossOriginStoragePublicHashList) ships with an
+//   empty seed; populating it is a separate fetch/verify/build-time-embed
+//   concern. See that class's own header comment.
+// - Rate limiting (CrossOriginStorageRateLimiter) uses fixed,
+//   non-configurable burst/refill constants copied from Servo's own
+//   choices, not tuned for Firefox specifically.
 class CrossOriginStorageRegistry {
  public:
   static CrossOriginStorageRegistry& GetOrCreate();
@@ -61,7 +70,9 @@ class CrossOriginStorageRegistry {
 
   // https://wicg.github.io/cross-origin-storage/#complete-a-read-request
   // (minus the promise/task-queuing and FileSystemFileHandle construction,
-  // which are the caller's job).
+  // which are the caller's job). A rate-limited request (see
+  // CrossOriginStorageRateLimiter) returns NotFound -- indistinguishable
+  // from a genuine miss, by design.
   ReadOutcome CompleteReadRequest(
       COSHashAlgorithm aAlgorithm, const nsACString& aValue,
       const mozilla::ipc::PrincipalInfo& aRequestingPrincipal);
@@ -71,9 +82,15 @@ class CrossOriginStorageRegistry {
   // existing one had gone stale), and increments its outstanding-writer
   // count either way. Returns whether the entry is already `written` at
   // this moment; informational only -- the live registry state at
-  // close() time is always authoritative.
-  bool CompleteCreateRequest(COSHashAlgorithm aAlgorithm,
-                             const nsACString& aValue);
+  // close() time is always authoritative. A rate-limited request (see
+  // CrossOriginStorageRateLimiter) silently skips creating/touching any
+  // entry and returns false, identically to an ordinary fresh pending
+  // creation -- the eventual close() for that write then fails generically
+  // (no entry to verify against), rather than surfacing a distinguishable
+  // "you are rate limited" signal at request time.
+  bool CompleteCreateRequest(
+      COSHashAlgorithm aAlgorithm, const nsACString& aValue,
+      const mozilla::ipc::PrincipalInfo& aWritingPrincipal);
 
   // https://wicg.github.io/cross-origin-storage/#verify-and-store
   // aBytes is the complete written byte sequence. On a hash mismatch,
@@ -81,7 +98,9 @@ class CrossOriginStorageRegistry {
   // outstanding-writer cleanup below; the caller must not call it again
   // for this session. On success, also runs "upgrade resource visibility"
   // (https://wicg.github.io/cross-origin-storage/#resource-visibility-upgrades)
-  // against aRequestedOrigins.
+  // against aRequestedOrigins, persists the entry to disk, and enforces
+  // the storage budget (EnforceStorageBudget), possibly evicting other
+  // entries.
   nsresult VerifyAndStore(COSHashAlgorithm aAlgorithm, const nsACString& aValue,
                           const nsTArray<uint8_t>& aBytes,
                           const mozilla::ipc::PrincipalInfo& aWritingPrincipal,
@@ -103,13 +122,14 @@ class CrossOriginStorageRegistry {
   // does not repeat availability gating; it only checks the entry's
   // current state
   // (https://wicg.github.io/cross-origin-storage/#cos-file-system) and, if
-  // Found, copies its bytes into aOutBytes.
+  // Found, reads its bytes back from disk (or memory, if persistence is
+  // unavailable) into aOutBytes.
   ReadOutcome GetFileBytes(COSHashAlgorithm aAlgorithm,
                            const nsACString& aValue,
                            nsTArray<uint8_t>& aOutBytes);
 
  private:
-  CrossOriginStorageRegistry() = default;
+  CrossOriginStorageRegistry();
 
   // https://wicg.github.io/cross-origin-storage/#cos-entries -- the
   // disclosure-scope part of a COS entry ("origins"). Distinct from
@@ -125,11 +145,13 @@ class CrossOriginStorageRegistry {
 
   struct Entry {
     enum class State { Pending, Written } mState = State::Pending;
-    nsTArray<uint8_t> mBytes;
     uint32_t mPendingWriterCount = 0;
     // Every origin that has successfully written this entry
     // (https://wicg.github.io/cross-origin-storage/#original-storer-access);
     // such an origin can always read the entry back, independent of mScope.
+    // mStoringOrigins[0], if present, is also who this entry's bytes are
+    // attributed to for per-origin storage-budget accounting -- the
+    // *first* successful writer, not every later co-storer.
     nsTArray<nsCString> mStoringOrigins;
     // The site (scheme + eTLD+1) of every entry in mStoringOrigins, kept in
     // lockstep -- same-site-only disclosure compares against these, not
@@ -139,6 +161,24 @@ class CrossOriginStorageRegistry {
     Scope mScope;
     // Only meaningful while mState is Pending; see IsStale().
     TimeStamp mPendingSince;
+    // Only meaningful while mState is Written. The complete byte count --
+    // kept resident even though the bytes themselves live on disk once
+    // written, since GREASE'ing's size ceiling and storage-budget
+    // accounting both need it cheaply, without a disk read.
+    uint64_t mByteSize = 0;
+    // True once this entry's bytes are safely on disk (GetFileBytes reads
+    // them back from there). False either transiently (write in
+    // progress) or durably, as a fallback, if persistence was
+    // unavailable or the disk write failed -- in which case mBytes below
+    // holds the bytes instead, exactly as Phase 1 originally worked.
+    bool mBytesOnDisk = false;
+    // Only meaningful while mState is Written and !mBytesOnDisk.
+    nsTArray<uint8_t> mBytes;
+    // Only meaningful while mState is Written. Updated on every
+    // disclosed read (in memory only -- not flushed to disk per read, to
+    // avoid a disk write on every read; see the class comment) and used
+    // for storage-budget eviction's oldest-read-first ordering.
+    int64_t mLastReadTime = 0;
 
     // A pending entry with no close()/abort() ever received (a page
     // navigated away, crashed, or simply never finished) would otherwise
@@ -157,7 +197,36 @@ class CrossOriginStorageRegistry {
   static void UpgradeResourceVisibility(
       Entry& aEntry, const COSRequestedOriginsValue& aRequestedOrigins);
 
+  // Loads every persisted entry's metadata (not bytes) into mEntries and
+  // sums mTotalBytesUsed/mOriginUsage, if persistence is available. A
+  // no-op (mEntries starts empty, matching Phase 1's original behavior)
+  // if it isn't.
+  void LoadPersistedEntries();
+
+  // https://wicg.github.io/cross-origin-storage/#storage-limits (not
+  // spec-mandated in exact shape). Called after a successful
+  // VerifyAndStore for aJustWrittenKey: if aWritingOrigin's own share or
+  // the global budget is now exceeded, evicts other entries -- oldest
+  // mLastReadTime first, preferring aWritingOrigin's own sole-owned
+  // entries before reaching for any other origin's -- until back under
+  // budget. Never evicts aJustWrittenKey itself. A no-op if the disk
+  // capacity needed to compute a budget is unavailable.
+  void EnforceStorageBudget(const nsACString& aJustWrittenKey,
+                            const nsACString& aWritingOrigin);
+
+  // Removes aKey from mEntries, mOriginUsage, and disk, and adjusts
+  // mTotalBytesUsed. Shared by EnforceStorageBudget and (indirectly) by
+  // ordinary entry replacement.
+  void EvictEntry(const nsACString& aKey, Entry& aEntry,
+                  COSHashAlgorithm aAlgorithm, const nsACString& aValue);
+
   nsClassHashtable<nsCStringHashKey, Entry> mEntries;
+
+  // Running totals kept in sync with mEntries by every insertion/eviction
+  // site, rather than re-summed on demand -- see the Phase 1 limitations
+  // note above re: this still being an O(n log n) eviction scan overall.
+  uint64_t mTotalBytesUsed = 0;
+  nsClassHashtable<nsCStringHashKey, uint64_t> mOriginUsage;
 };
 
 }  // namespace mozilla::dom
