@@ -1,0 +1,64 @@
+name: Cross-Origin Storage build (macOS arm64)
+
+# Builds this branch's Firefox and publishes it as a GitHub Release, so
+# testers don't need to build from source themselves. This is a personal
+# fork's workflow for one in-development feature branch, not part of
+# mozilla-central's own CI -- see .github/workflows/README before adding
+# anything similar there.
+#
+# Single platform (macOS arm64, matching the machine this feature has been
+# developed and tested on) and a full clean build every run: no
+# cross-platform matrix, no incremental build caching. A full build
+# realistically takes 30-90+ minutes depending on runner performance.
+
+on:
+  push:
+    branches:
+      - cross-origin-storage
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: macos-14
+    timeout-minutes: 360
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 1
+
+      - name: mach bootstrap
+        run: ./mach bootstrap --application-choice=browser
+
+      - name: mach build
+        run: ./mach build
+
+      - name: mach package
+        run: ./mach package
+
+      - name: Locate the packaged artifact
+        id: artifact
+        run: |
+          dmg=$(find obj-*/dist -maxdepth 1 -name '*.dmg' | head -1)
+          if [ -z "$dmg" ]; then
+            echo "No .dmg found under obj-*/dist" >&2
+            exit 1
+          fi
+          echo "path=$dmg" >> "$GITHUB_OUTPUT"
+
+      - name: Publish to the cross-origin-storage-latest release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: cross-origin-storage-latest
+          name: Cross-Origin Storage (latest build)
+          body: |
+            Automated build of the `cross-origin-storage` branch at
+            ${{ github.sha }}.
+
+            Cross-Origin Storage is disabled by default; enable it via
+            `about:config` (`dom.crossOriginStorage.enabled` = `true`) or
+            launch with `--setpref dom.crossOriginStorage.enabled=true`.
+          prerelease: true
+          files: ${{ steps.artifact.outputs.path }}
