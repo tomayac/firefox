@@ -80,7 +80,8 @@ mozilla::ipc::IPCResult CrossOriginStorageParent::RecvRequestFileHandle(
 
 mozilla::ipc::IPCResult CrossOriginStorageParent::RecvBeginWrite(
     uint64_t aWriteId, const nsCString& aAlgorithm, const nsCString& aValue,
-    const PrincipalInfo& aWritingPrincipal) {
+    const PrincipalInfo& aWritingPrincipal,
+    const COSRequestedOrigins& aRequestedOrigins) {
   mozilla::ipc::AssertIsOnBackgroundThread();
 
   Maybe<COSHashAlgorithm> algorithm =
@@ -96,6 +97,7 @@ mozilla::ipc::IPCResult CrossOriginStorageParent::RecvBeginWrite(
   session->mAlgorithm = *algorithm;
   session->mValue = aValue;
   session->mWritingPrincipal = aWritingPrincipal;
+  session->mRequestedOrigins = aRequestedOrigins;
   return IPC_OK();
 }
 
@@ -121,10 +123,18 @@ mozilla::ipc::IPCResult CrossOriginStorageParent::RecvFinishWrite(
     return IPC_OK();
   }
 
+  COSRequestedOriginsValue requestedOrigins;
+  if (session->mRequestedOrigins.wildcard()) {
+    requestedOrigins.mKind = COSRequestedOriginsValue::Kind::Wildcard;
+  } else if (!session->mRequestedOrigins.list().IsEmpty()) {
+    requestedOrigins.mKind = COSRequestedOriginsValue::Kind::List;
+    requestedOrigins.mList = session->mRequestedOrigins.list().Clone();
+  }
+
   // https://wicg.github.io/cross-origin-storage/#verify-and-store
   nsresult rv = CrossOriginStorageRegistry::GetOrCreate().VerifyAndStore(
       session->mAlgorithm, session->mValue, session->mBytes,
-      session->mWritingPrincipal);
+      session->mWritingPrincipal, requestedOrigins);
 
   mWriteSessions.Remove(aWriteId);
 

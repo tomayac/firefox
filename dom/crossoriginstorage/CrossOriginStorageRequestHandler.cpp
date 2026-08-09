@@ -19,8 +19,11 @@ namespace mozilla::dom {
 
 CrossOriginStorageRequestHandler::CrossOriginStorageRequestHandler(
     RefPtr<CrossOriginStorageChild> aActor, COSHashAlgorithm aAlgorithm,
-    const nsACString& aValue)
-    : mActor(std::move(aActor)), mAlgorithm(aAlgorithm), mValue(aValue) {}
+    const nsACString& aValue, COSRequestedOriginsValue aRequestedOrigins)
+    : mActor(std::move(aActor)),
+      mAlgorithm(aAlgorithm),
+      mValue(aValue),
+      mRequestedOrigins(std::move(aRequestedOrigins)) {}
 
 void CrossOriginStorageRequestHandler::GetFile(
     RefPtr<FileSystemManager>& aManager,
@@ -90,7 +93,14 @@ void CrossOriginStorageRequestHandler::GetWritable(
   }
 
   nsCString algorithm(CanonicalHashAlgorithmName(mAlgorithm));
-  (void)mActor->SendBeginWrite(writeId, algorithm, mValue, writingPrincipal);
+  COSRequestedOrigins wireRequestedOrigins;
+  wireRequestedOrigins.wildcard() =
+      mRequestedOrigins.mKind == COSRequestedOriginsValue::Kind::Wildcard;
+  if (mRequestedOrigins.mKind == COSRequestedOriginsValue::Kind::List) {
+    wireRequestedOrigins.list() = mRequestedOrigins.mList.Clone();
+  }
+  (void)mActor->SendBeginWrite(writeId, algorithm, mValue, writingPrincipal,
+                               wireRequestedOrigins);
 
   AutoJSAPI jsapi;
   if (!jsapi.Init(global)) {

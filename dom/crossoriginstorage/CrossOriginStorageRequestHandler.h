@@ -26,7 +26,8 @@ class CrossOriginStorageRequestHandler final
  public:
   CrossOriginStorageRequestHandler(RefPtr<CrossOriginStorageChild> aActor,
                                    COSHashAlgorithm aAlgorithm,
-                                   const nsACString& aValue);
+                                   const nsACString& aValue,
+                                   COSRequestedOriginsValue aRequestedOrigins);
 
   // https://wicg.github.io/cross-origin-storage/#cos-file-system
   void GetFile(RefPtr<FileSystemManager>& aManager,
@@ -43,6 +44,12 @@ class CrossOriginStorageRequestHandler final
   RefPtr<CrossOriginStorageChild> mActor;
   COSHashAlgorithm mAlgorithm;
   nsCString mValue;
+  // https://wicg.github.io/cross-origin-storage/#creating-and-writing-files
+  // FileSystemFileHandle's "requested origins" slot: the caller's
+  // options["origins"], normalized at requestFileHandle() time and applied
+  // via "upgrade resource visibility" when the write this handle backs
+  // eventually closes.
+  COSRequestedOriginsValue mRequestedOrigins;
 };
 
 }  // namespace mozilla::dom

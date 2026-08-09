@@ -44,7 +44,8 @@ class CrossOriginStorageParent final : public PCrossOriginStorageParent {
 
   mozilla::ipc::IPCResult RecvBeginWrite(
       uint64_t aWriteId, const nsCString& aAlgorithm, const nsCString& aValue,
-      const mozilla::ipc::PrincipalInfo& aWritingPrincipal);
+      const mozilla::ipc::PrincipalInfo& aWritingPrincipal,
+      const COSRequestedOrigins& aRequestedOrigins);
 
   mozilla::ipc::IPCResult RecvWriteChunk(uint64_t aWriteId,
                                          nsTArray<uint8_t>&& aChunk);
@@ -62,6 +63,10 @@ class CrossOriginStorageParent final : public PCrossOriginStorageParent {
     COSHashAlgorithm mAlgorithm;
     nsCString mValue;
     mozilla::ipc::PrincipalInfo mWritingPrincipal;
+    // The wire-format (COSRequestedOrigins, from PCrossOriginStorage.ipdl)
+    // request; converted to the registry's own
+    // COSRequestedOriginsValue only at FinishWrite time.
+    COSRequestedOrigins mRequestedOrigins;
     nsTArray<uint8_t> mBytes;
   };
 

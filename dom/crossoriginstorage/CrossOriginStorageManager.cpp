@@ -39,13 +39,6 @@ bool IsLowercaseHex(const nsAString& aValue) {
   return true;
 }
 
-// An implementation-defined maximum length for the `origins` option's list
-// form (https://wicg.github.io/cross-origin-storage/#storage-limits), so a
-// list of origins can't be used as an undeclared substitute for "*". 100 is
-// the value both of the two known independent implementations (Servo,
-// Ladybird) use.
-constexpr uint32_t kMaxOriginsListLength = 100;
-
 // https://wicg.github.io/cross-origin-storage/#validate-a-cos-request
 // Returns the parsed algorithm on success, or Nothing() with aRv set to a
 // TypeError on failure.
@@ -72,8 +65,7 @@ Maybe<COSHashAlgorithm> ValidateRequest(
   }
 
   // Step 3: if options["origins"] doesn't exist, there is nothing further
-  // to validate -- and, since that's also the only disclosure scope Phase 1
-  // implements (see below), validation is done.
+  // to validate.
   if (!aOptions.mOrigins.WasPassed()) {
     return algorithm;
   }
@@ -114,15 +106,49 @@ Maybe<COSHashAlgorithm> ValidateRequest(
     }
   }
 
-  // Phase 1 limitation: only the same-site-only disclosure scope (i.e.
-  // options["origins"] omitted) is implemented so far; list- and
-  // wildcard-scoped entries (including a well-formed "*") are follow-up
-  // work. Reject explicitly rather than silently downgrading a caller's
-  // requested scope to same-site-only -- a request that shape-validates
-  // still must not be honored with different semantics than it asked for.
-  aRv.ThrowTypeError(
-      "the origins option is not yet supported by this implementation");
-  return Nothing();
+  return algorithm;
+}
+
+// https://wicg.github.io/cross-origin-storage/#normalize-requested-origins
+// Only called once ValidateRequest has already confirmed aOptions.mOrigins
+// (if present) shape-validates, so the URL-parse/opaque-origin checks below
+// cannot fail here.
+COSRequestedOriginsValue NormalizeRequestedOrigins(
+    const CrossOriginStorageRequestFileHandleOptions& aOptions) {
+  COSRequestedOriginsValue result;
+  if (!aOptions.mOrigins.WasPassed()) {
+    return result;
+  }
+  const auto& origins = aOptions.mOrigins.Value();
+  if (origins.IsString() && origins.GetAsString().EqualsLiteral("*")) {
+    result.mKind = COSRequestedOriginsValue::Kind::Wildcard;
+    return result;
+  }
+
+  nsTArray<nsString> candidates;
+  if (origins.IsString()) {
+    candidates.AppendElement(origins.GetAsString());
+  } else {
+    candidates.AppendElements(origins.GetAsStringSequence());
+  }
+
+  result.mKind = COSRequestedOriginsValue::Kind::List;
+  for (const auto& candidate : candidates) {
+    nsCOMPtr<nsIURI> uri;
+    if (NS_FAILED(NS_NewURI(getter_AddRefs(uri), candidate))) {
+      continue;
+    }
+    nsCOMPtr<nsIPrincipal> principal =
+        BasePrincipal::CreateContentPrincipal(uri, OriginAttributes());
+    nsAutoCString origin;
+    if (NS_FAILED(principal->GetOrigin(origin))) {
+      continue;
+    }
+    if (!result.mList.Contains(origin)) {
+      result.mList.AppendElement(origin);
+    }
+  }
+  return result;
 }
 
 // If aGlobal is a Window, returns its Document, if any. Worker globals have
@@ -228,15 +254,17 @@ already_AddRefed<Promise> CrossOriginStorageManager::RequestFileHandle(
   nsAutoCString value(NS_ConvertUTF16toUTF8(aHash.mValue));
   nsAutoCString algorithmName(CanonicalHashAlgorithmName(*algorithm));
   bool create = aOptions.mCreate;
+  COSRequestedOriginsValue requestedOrigins =
+      NormalizeRequestedOrigins(aOptions);
 
   // Step 8.
   actor->SendRequestFileHandle(algorithmName, value, create, principalInfo)
       ->Then(
           GetCurrentSerialEventTarget(), __func__,
           [promise, global = mGlobal, actor = RefPtr(actor),
-           algorithm = *algorithm,
-           value](const CrossOriginStorageChild::RequestFileHandlePromise::
-                      ResolveOrRejectValue& aResult) {
+           algorithm = *algorithm, value, requestedOrigins](
+              const CrossOriginStorageChild::RequestFileHandlePromise::
+                  ResolveOrRejectValue& aResult) {
             if (!aResult.IsResolve()) {
               promise->MaybeRejectWithUnknownError(
                   "Cross-Origin Storage IPC error");
@@ -258,7 +286,7 @@ already_AddRefed<Promise> CrossOriginStorageManager::RequestFileHandle(
                 value, NS_ConvertUTF8toUTF16(value), /* directory */ false);
             RefPtr<FileSystemManager> nullManager;
             auto requestHandler = MakeUnique<CrossOriginStorageRequestHandler>(
-                actor, algorithm, value);
+                actor, algorithm, value, requestedOrigins);
             RefPtr<FileSystemFileHandle> handle = new FileSystemFileHandle(
                 global, nullManager, metadata, requestHandler.release());
             promise->MaybeResolve(handle);

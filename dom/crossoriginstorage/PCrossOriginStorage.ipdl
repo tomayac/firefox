@@ -37,6 +37,17 @@ union COSGetFileBytesResult
   nsresult;
 };
 
+// https://wicg.github.io/cross-origin-storage/#normalize-requested-origins
+// Wire form of options["origins"], normalized on the child side. `list`
+// distinguishes "no origins requested" (an empty array; the default,
+// same-site-only scope) from an explicit non-empty list; `wildcard`
+// (options.origins === "*") takes precedence over `list` when true.
+struct COSRequestedOrigins
+{
+  bool wildcard;
+  nsCString[] list;
+};
+
 // The registry backing navigator.crossOriginStorage, per
 // https://wicg.github.io/cross-origin-storage/. A single instance is shared
 // by every content process, deliberately not scoped by origin the way
@@ -67,7 +78,8 @@ parent:
   // (see CrossOriginStorageRegistry.h). `writeId` is a child-generated,
   // per-actor-only token correlating these calls -- not spec-visible.
   async BeginWrite(uint64_t writeId, nsCString algorithm, nsCString value,
-                   PrincipalInfo writingPrincipal);
+                   PrincipalInfo writingPrincipal,
+                   COSRequestedOrigins requestedOrigins);
   async WriteChunk(uint64_t writeId, uint8_t[] chunk);
   // On failure, `result` is an nsresult the child maps to the DOMException
   // close() should reject with (currently always DataError).

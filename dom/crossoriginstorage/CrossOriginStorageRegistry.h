@@ -37,10 +37,13 @@ namespace mozilla::dom {
 // Phase 1 limitations, tracked as explicit follow-up work rather than
 // silently skipped:
 // - Entries are in-memory only (lost on restart); no on-disk persistence.
-// - Only the same-site-only disclosure scope is implemented. List- and
-//   wildcard-scoped entries, the Public Hash List, and GREASE'ing don't
-//   exist yet -- CrossOriginStorageManager rejects any requestFileHandle()
-//   call that specifies the `origins` option at all.
+// - Wildcard-scoped entries are disclosed to every requesting origin
+//   unconditionally: the Public Hash List gate and GREASE'ing
+//   (https://wicg.github.io/cross-origin-storage/#availability-gating),
+//   both of which existing implementations treat as load-bearing privacy
+//   mechanisms for the wildcard case specifically, don't exist yet. This
+//   is a real, deliberate gap -- acceptable for a disabled-by-default,
+//   unshipped local build, not for anything further along.
 // - No rate limiting, and no storage-budget/eviction accounting.
 class CrossOriginStorageRegistry {
  public:
@@ -72,10 +75,13 @@ class CrossOriginStorageRegistry {
   // aBytes is the complete written byte sequence. On a hash mismatch,
   // returns NS_ERROR_DOM_DATA_ERR and has already run the
   // outstanding-writer cleanup below; the caller must not call it again
-  // for this session.
+  // for this session. On success, also runs "upgrade resource visibility"
+  // (https://wicg.github.io/cross-origin-storage/#resource-visibility-upgrades)
+  // against aRequestedOrigins.
   nsresult VerifyAndStore(COSHashAlgorithm aAlgorithm, const nsACString& aValue,
                           const nsTArray<uint8_t>& aBytes,
-                          const mozilla::ipc::PrincipalInfo& aWritingPrincipal);
+                          const mozilla::ipc::PrincipalInfo& aWritingPrincipal,
+                          const COSRequestedOriginsValue& aRequestedOrigins);
 
   // The cleanup half of a failed close() (already run by VerifyAndStore on
   // a hash mismatch) or of an explicit abort(): decrements the entry's
@@ -101,17 +107,32 @@ class CrossOriginStorageRegistry {
  private:
   CrossOriginStorageRegistry() = default;
 
+  // https://wicg.github.io/cross-origin-storage/#cos-entries -- the
+  // disclosure-scope part of a COS entry ("origins"). Distinct from
+  // COSRequestedOrigins (the wire-format request payload): this is the
+  // live, mergeable entry state, and List additionally tracks recency for
+  // the LRU eviction upgrade-time merging needs.
+  struct Scope {
+    enum class Kind { SameSiteOnly, List, Wildcard } mKind = Kind::SameSiteOnly;
+    // Meaningful only when mKind == Kind::List. Ordered least-recently-used
+    // first; see CrossOriginStorageRegistry.cpp's disclosure/merge logic.
+    nsTArray<nsCString> mList;
+  };
+
   struct Entry {
     enum class State { Pending, Written } mState = State::Pending;
     nsTArray<uint8_t> mBytes;
     uint32_t mPendingWriterCount = 0;
-    // The "site" (scheme + eTLD+1; see GetSite() in the .cpp) of every
-    // origin that has successfully written this entry. Phase 1 only
-    // supports same-site-only disclosure, so membership here is also the
-    // entire disclosure story -- there is no separate `origins` scope
-    // field yet. A future phase that adds per-origin storage-budget
-    // accounting will need the exact origins too, not just their sites.
+    // Every origin that has successfully written this entry
+    // (https://wicg.github.io/cross-origin-storage/#original-storer-access);
+    // such an origin can always read the entry back, independent of mScope.
+    nsTArray<nsCString> mStoringOrigins;
+    // The site (scheme + eTLD+1) of every entry in mStoringOrigins, kept in
+    // lockstep -- same-site-only disclosure compares against these, not
+    // against mStoringOrigins directly, since that scope discloses to any
+    // origin same-site with a storing origin, not just exact matches.
     nsTArray<nsCString> mStoringSites;
+    Scope mScope;
     // Only meaningful while mState is Pending; see IsStale().
     TimeStamp mPendingSince;
 
@@ -127,6 +148,10 @@ class CrossOriginStorageRegistry {
 
   static nsAutoCString MakeKey(COSHashAlgorithm aAlgorithm,
                                const nsACString& aValue);
+
+  // https://wicg.github.io/cross-origin-storage/#resource-visibility-upgrades
+  static void UpgradeResourceVisibility(
+      Entry& aEntry, const COSRequestedOriginsValue& aRequestedOrigins);
 
   nsClassHashtable<nsCStringHashKey, Entry> mEntries;
 };

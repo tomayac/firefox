@@ -7,6 +7,7 @@
 
 #include "mozilla/Maybe.h"
 #include "nsStringFwd.h"
+#include "nsTArray.h"
 #include "nsTArrayForwardDeclare.h"
 
 namespace mozilla::dom {
@@ -18,6 +19,41 @@ enum class COSHashAlgorithm {
   SHA256,
   SHA384,
   SHA512,
+};
+
+// An implementation-defined maximum length for the `origins` option's list
+// form (https://wicg.github.io/cross-origin-storage/#storage-limits), so a
+// list of origins can't be used as an undeclared substitute for "*". 100 is
+// the value both of the two known independent implementations (Servo,
+// Ladybird) use. Enforced both at request-validation time
+// (CrossOriginStorageManager) and at merge time
+// (CrossOriginStorageRegistry::UpgradeResourceVisibility).
+constexpr uint32_t kMaxOriginsListLength = 100;
+
+// https://wicg.github.io/cross-origin-storage/#normalize-requested-origins
+// The result of normalizing options["origins"]: same-site-only (the
+// default, when the option is omitted), an explicit list of ASCII-
+// serialized origins, or wildcard. Distinct from the IPDL-generated
+// COSRequestedOrigins (PCrossOriginStorage.ipdl's wire form of the same
+// concept) -- this is the client-side, pre-serialization representation.
+struct COSRequestedOriginsValue {
+  enum class Kind { SameSiteOnly, List, Wildcard };
+  Kind mKind = Kind::SameSiteOnly;
+  // Meaningful only when mKind == Kind::List.
+  nsTArray<nsCString> mList;
+
+  COSRequestedOriginsValue() = default;
+  COSRequestedOriginsValue(COSRequestedOriginsValue&&) = default;
+  COSRequestedOriginsValue& operator=(COSRequestedOriginsValue&&) = default;
+  // nsTArray's copy constructor is explicit (deliberately, to make copies
+  // visible at call sites as .Clone()), which otherwise leaves this
+  // struct's own copy constructor implicitly deleted; every call site that
+  // needs a copy (lambda captures, a UniquePtr constructor forwarding an
+  // lvalue) needs it to be implicit, so spell it out here instead of
+  // pushing .Clone() out to each of them.
+  COSRequestedOriginsValue(const COSRequestedOriginsValue& aOther)
+      : mKind(aOther.mKind), mList(aOther.mList.Clone()) {}
+  COSRequestedOriginsValue& operator=(const COSRequestedOriginsValue&) = delete;
 };
 
 // Case-insensitively matches aName against a recognized [[WEBCRYPTO]] hash
