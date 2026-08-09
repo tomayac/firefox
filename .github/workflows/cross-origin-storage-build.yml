@@ -1,20 +1,31 @@
-name: Cross-Origin Storage build (macOS arm64)
+name: Cross-Origin Storage build (macOS / Linux / Windows)
 
-# Builds this branch's Firefox and publishes it as a GitHub Release, so
-# testers don't need to build from source themselves. This is a personal
-# fork's workflow for one in-development feature branch, not part of
-# mozilla-central's own CI -- see .github/workflows/README before adding
-# anything similar there.
+# Builds this branch's Firefox for all three desktop platforms and
+# publishes each as a GitHub Release, so testers don't need to build from
+# source themselves. This is a personal fork's workflow for one
+# in-development feature branch, not part of mozilla-central's own CI --
+# see .github/workflows/README before adding anything similar there.
 #
-# Single platform (macOS arm64, matching the machine this feature has been
-# developed and tested on) and a full clean build every run: no
-# cross-platform matrix, no incremental build caching. A full build
-# realistically takes 30-90+ minutes depending on runner performance.
+# Manual dispatch only (not on every push): a full clean build across
+# three platforms, with no incremental build caching, is expensive --
+# each platform realistically takes 30-90+ minutes depending on runner
+# performance, and there's no reason to pay that on every commit. Trigger
+# it explicitly from the Actions tab (or `gh workflow run`) when you
+# actually want fresh builds to hand out.
+#
+# Platform support note: only the macOS arm64 leg has actually been run
+# and verified end-to-end (it's the machine this feature has been
+# developed and tested on). The Linux and Windows legs follow the same
+# `./mach bootstrap`/`./mach build`/`./mach package` recipe, which is
+# Mozilla's own documented cross-platform build process, but GitHub-hosted
+# runners don't ship the exact toolchains mozilla-central's real CI images
+# do (Windows in particular normally needs MozillaBuild + the Visual
+# Studio Build Tools/Windows SDK, which `./mach bootstrap` attempts to
+# install itself but hasn't been confirmed to succeed non-interactively in
+# this environment). Treat those two legs as best-effort until a run has
+# actually gone green.
 
 on:
-  push:
-    branches:
-      - cross-origin-storage
   workflow_dispatch:
 
 permissions:
@@ -22,7 +33,22 @@ permissions:
 
 jobs:
   build:
-    runs-on: macos-14
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: macOS arm64
+            os: macos-14
+            artifact_glob: "obj-*/dist/*.dmg"
+          - name: Linux x86_64
+            os: ubuntu-22.04
+            artifact_glob: "obj-*/dist/*.tar.@(bz2|xz)"
+          - name: Windows x86_64
+            os: windows-2022
+            artifact_glob: "obj-*/dist/install/sea/*.installer.exe"
+
+    name: ${{ matrix.name }}
+    runs-on: ${{ matrix.os }}
     timeout-minutes: 360
     steps:
       - uses: actions/checkout@v4
@@ -30,23 +56,28 @@ jobs:
           fetch-depth: 1
 
       - name: mach bootstrap
-        run: ./mach bootstrap --application-choice=browser
+        shell: bash
+        run: ./mach bootstrap --application-choice=browser --no-interactive
 
       - name: mach build
+        shell: bash
         run: ./mach build
 
       - name: mach package
+        shell: bash
         run: ./mach package
 
       - name: Locate the packaged artifact
         id: artifact
+        shell: bash
         run: |
-          dmg=$(find obj-*/dist -maxdepth 1 -name '*.dmg' | head -1)
-          if [ -z "$dmg" ]; then
-            echo "No .dmg found under obj-*/dist" >&2
+          shopt -s extglob nullglob globstar
+          matches=(${{ matrix.artifact_glob }})
+          if [ "${#matches[@]}" -eq 0 ]; then
+            echo "No artifact matching ${{ matrix.artifact_glob }} found under obj-*/dist" >&2
             exit 1
           fi
-          echo "path=$dmg" >> "$GITHUB_OUTPUT"
+          echo "path=${matches[0]}" >> "$GITHUB_OUTPUT"
 
       - name: Publish to the cross-origin-storage-latest release
         uses: softprops/action-gh-release@v2
@@ -55,7 +86,8 @@ jobs:
           name: Cross-Origin Storage (latest build)
           body: |
             Automated build of the `cross-origin-storage` branch at
-            ${{ github.sha }}.
+            ${{ github.sha }}, for macOS arm64, Linux x86_64, and Windows
+            x86_64.
 
             Cross-Origin Storage is disabled by default; enable it via
             `about:config` (`dom.crossOriginStorage.enabled` = `true`) or
