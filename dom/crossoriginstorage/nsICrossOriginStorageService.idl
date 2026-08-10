@@ -1,0 +1,37 @@
+/* This Source Code Form is subject to the terms of the Mozilla Public
+ * License, v. 2.0. If a copy of the MPL was not distributed with this
+ * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
+
+#include "nsISupports.idl"
+
+/**
+ * Parent-process-only entry point for clearing Cross-Origin Storage data
+ * (https://wicg.github.io/cross-origin-storage/) from outside the normal
+ * navigator.crossOriginStorage actor path -- currently used only by
+ * nsIClearDataService's CLEAR_CROSS_ORIGIN_STORAGE cleaner
+ * (toolkit/components/cleardata/ClearDataService.sys.mjs). Not exposed to
+ * content.
+ */
+[scriptable, builtinclass, uuid(c0018227-ccef-41ff-b816-d03d20a7578d)]
+interface nsICrossOriginStorageService : nsISupports
+{
+  /**
+   * Deletes every Cross-Origin Storage entry, in memory and on disk.
+   */
+  [implicit_jscontext] Promise clear();
+
+  /**
+   * The spec has no clear-data algorithm of its own; this implements
+   * what nsIClearDataService's deleteBySite()/deleteByPrincipal() need:
+   * revokes aSchemelessSite's (and every origin under it, matched by
+   * host suffix -- the same convention deleteBySite() itself uses)
+   * association with every entry it stored, removing it from that
+   * entry's storing origins/sites and any explicit origins list. An
+   * entry left with no storing origin as a result is deleted entirely;
+   * an entry another, unrelated site also legitimately stored keeps
+   * that other site's copy -- entries aren't per-origin storage, so a
+   * site-scoped clear can't simply delete by ownership the way most
+   * other data categories do.
+   */
+  [implicit_jscontext] Promise clearBySite(in ACString aSchemelessSite);
+};

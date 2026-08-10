@@ -256,6 +256,17 @@ interface nsIClearDataService : nsISupports
   const uint32_t CLEAR_DOM_QUOTA = 1 << 7;
 
   /**
+   * Cross-Origin Storage (https://wicg.github.io/cross-origin-storage/).
+   * Deliberately separate from CLEAR_DOM_QUOTA: entries aren't
+   * per-origin storage, so a principal/site clear revokes that
+   * origin's association with each entry it stored (removing it from
+   * the entry's storing origins and any origins list) rather than
+   * necessarily deleting the entry outright -- see
+   * CrossOriginStorageCleaner.
+   */
+  const uint32_t CLEAR_CROSS_ORIGIN_STORAGE = 1 << 8;
+
+  /**
    * DOM Push notifications
    */
   const uint32_t CLEAR_DOM_PUSH_NOTIFICATIONS = 1 << 9;
@@ -386,7 +397,7 @@ interface nsIClearDataService : nsISupports
   /**
    * Delete all DOM storages
    */
-  const uint32_t CLEAR_DOM_STORAGES = CLEAR_DOM_QUOTA | CLEAR_DOM_PUSH_NOTIFICATIONS | CLEAR_REPORTS;
+  const uint32_t CLEAR_DOM_STORAGES = CLEAR_DOM_QUOTA | CLEAR_DOM_PUSH_NOTIFICATIONS | CLEAR_REPORTS | CLEAR_CROSS_ORIGIN_STORAGE;
 
   /**
    * Helper flag for forget about site

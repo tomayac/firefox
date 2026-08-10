@@ -91,6 +91,34 @@ nsresult GetSite(const PrincipalInfo& aPrincipalInfo, nsACString& aOutSite) {
   }
 }
 
+// Whether aSiteOrOrigin (an Entry::mStoringSites/mScope.mList entry --
+// "scheme://host[:port]", or a bare "scheme://host") is aSchemelessSite
+// or a subdomain of it, ignoring scheme and port. Mirrors
+// nsIClearDataService::deleteBySite()'s own host-suffix convention
+// (ClearDataService.sys.mjs's QuotaCleaner.deleteByHost has the same
+// "foo.example.com matches example.com" semantics) rather than a real
+// public-suffix-list eTLD+1 computation, which a plain string already
+// carrying a resolved eTLD+1 (as every site/origin string here does)
+// doesn't need anyway.
+bool HostMatchesSchemelessSite(const nsACString& aSiteOrOrigin,
+                               const nsACString& aSchemelessSite) {
+  nsAutoCString host(aSiteOrOrigin);
+  int32_t schemeEnd = host.Find("://");
+  if (schemeEnd >= 0) {
+    host = Substring(host, schemeEnd + 3);
+  }
+  int32_t portColon = host.Find(":");
+  if (portColon >= 0) {
+    host = Substring(host, 0, portColon);
+  }
+  if (host.Equals(aSchemelessSite)) {
+    return true;
+  }
+  return host.Length() > aSchemelessSite.Length() &&
+         StringEndsWith(host, aSchemelessSite) &&
+         host.CharAt(host.Length() - aSchemelessSite.Length() - 1) == '.';
+}
+
 }  // namespace
 
 bool CrossOriginStorageRegistry::Entry::IsStale() const {
@@ -106,6 +134,27 @@ nsAutoCString CrossOriginStorageRegistry::MakeKey(COSHashAlgorithm aAlgorithm,
   key.Append(':');
   key.Append(aValue);
   return key;
+}
+
+/* static */
+bool CrossOriginStorageRegistry::SplitKey(const nsACString& aKey,
+                                          COSHashAlgorithm* aOutAlgorithm,
+                                          nsACString& aOutValue) {
+  int32_t colon = aKey.Find(":");
+  if (colon < 0) {
+    aOutValue.Truncate();
+    return false;
+  }
+  nsAutoCString algorithmName(Substring(aKey, 0, colon));
+  Maybe<COSHashAlgorithm> algorithm =
+      ParseHashAlgorithm(NS_ConvertUTF8toUTF16(algorithmName));
+  if (!algorithm) {
+    aOutValue.Truncate();
+    return false;
+  }
+  *aOutAlgorithm = *algorithm;
+  aOutValue = Substring(aKey, colon + 1);
+  return true;
 }
 
 CrossOriginStorageRegistry::CrossOriginStorageRegistry() {
@@ -462,10 +511,10 @@ void CrossOriginStorageRegistry::EnforceStorageBudget(
   // header for the real, incremental design this should become.
   struct Candidate {
     nsCString mKey;
-    COSHashAlgorithm mAlgorithm;
+    COSHashAlgorithm mAlgorithm = COSHashAlgorithm::SHA256;
     nsCString mValue;
     nsCString mOwner;  // Empty if this entry has no attributed owner.
-    int64_t mLastReadTime;
+    int64_t mLastReadTime = 0;
   };
   nsTArray<Candidate> candidates;
   for (auto iter = mEntries.Iter(); !iter.Done(); iter.Next()) {
@@ -478,16 +527,7 @@ void CrossOriginStorageRegistry::EnforceStorageBudget(
     }
     Candidate& c = *candidates.AppendElement();
     c.mKey = iter.Key();
-    // The key is "<algorithm>:<value>"; split it back apart rather than
-    // storing algorithm/value redundantly on every Entry.
-    int32_t colon = c.mKey.Find(":");
-    nsAutoCString algorithmName(
-        Substring(c.mKey, 0, colon < 0 ? 0 : static_cast<uint32_t>(colon)));
-    Maybe<COSHashAlgorithm> algorithm =
-        ParseHashAlgorithm(NS_ConvertUTF8toUTF16(algorithmName));
-    c.mAlgorithm = algorithm.valueOr(COSHashAlgorithm::SHA256);
-    c.mValue =
-        colon < 0 ? EmptyCString() : nsCString(Substring(c.mKey, colon + 1));
+    SplitKey(c.mKey, &c.mAlgorithm, c.mValue);
     if (!entry->mStoringOrigins.IsEmpty()) {
       c.mOwner = entry->mStoringOrigins[0];
     }
@@ -598,6 +638,76 @@ CrossOriginStorageRegistry::GetFileBytes(COSHashAlgorithm aAlgorithm,
   // failed, e.g. removed out from under us) -- treat as not found rather
   // than returning a Found result with no actual content.
   return ReadOutcome::NotFound;
+}
+
+void CrossOriginStorageRegistry::ClearAll() {
+  mozilla::ipc::AssertIsOnBackgroundThread();
+
+  if (CrossOriginStoragePersistence* persistence =
+          CrossOriginStoragePersistence::GetOrCreate()) {
+    persistence->ClearAll();
+  }
+  mEntries.Clear();
+  mTotalBytesUsed = 0;
+  mOriginUsage.Clear();
+}
+
+void CrossOriginStorageRegistry::RemoveSite(const nsACString& aSchemelessSite) {
+  mozilla::ipc::AssertIsOnBackgroundThread();
+
+  nsTArray<nsCString> keysToEvict;
+  for (auto iter = mEntries.Iter(); !iter.Done(); iter.Next()) {
+    Entry* entry = iter.Data().get();
+
+    // If every storing origin belongs to the site being cleared, evict
+    // the whole entry -- via EvictEntry below, which needs
+    // mStoringOrigins[0] intact for its own usage-decrement, so this
+    // check (and the eviction itself) must happen before any mutation.
+    bool allOriginsMatch = !entry->mStoringOrigins.IsEmpty();
+    for (const auto& site : entry->mStoringSites) {
+      if (!HostMatchesSchemelessSite(site, aSchemelessSite)) {
+        allOriginsMatch = false;
+        break;
+      }
+    }
+    if (allOriginsMatch) {
+      keysToEvict.AppendElement(iter.Key());
+      continue;
+    }
+
+    // Otherwise, just revoke this site's own share: remove its
+    // storing-origin/storing-site entries (kept in lockstep) and its
+    // List-scope disclosure grants, leaving the rest of the entry (and
+    // any other storing origin's data) intact.
+    for (size_t i = entry->mStoringSites.Length(); i > 0; --i) {
+      if (HostMatchesSchemelessSite(entry->mStoringSites[i - 1],
+                                    aSchemelessSite)) {
+        entry->mStoringSites.RemoveElementAt(i - 1);
+        entry->mStoringOrigins.RemoveElementAt(i - 1);
+      }
+    }
+    if (entry->mScope.mKind == Scope::Kind::List) {
+      for (size_t i = entry->mScope.mList.Length(); i > 0; --i) {
+        if (HostMatchesSchemelessSite(entry->mScope.mList[i - 1],
+                                      aSchemelessSite)) {
+          entry->mScope.mList.RemoveElementAt(i - 1);
+        }
+      }
+    }
+  }
+
+  for (const auto& key : keysToEvict) {
+    Entry* entry = mEntries.Get(key);
+    if (!entry) {
+      continue;
+    }
+    COSHashAlgorithm algorithm;
+    nsAutoCString value;
+    if (!SplitKey(key, &algorithm, value)) {
+      continue;
+    }
+    EvictEntry(key, *entry, algorithm, value);
+  }
 }
 
 }  // namespace mozilla::dom

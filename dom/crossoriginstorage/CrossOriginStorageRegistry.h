@@ -128,6 +128,31 @@ class CrossOriginStorageRegistry {
                            const nsACString& aValue,
                            nsTArray<uint8_t>& aOutBytes);
 
+  // nsICrossOriginStorageService's backing (see CrossOriginStorageService.h)
+  // -- reached from nsIClearDataService's CLEAR_CROSS_ORIGIN_STORAGE
+  // cleaner, not from the actor path any content process uses.
+
+  // Deletes every entry, in memory and on disk.
+  void ClearAll();
+
+  // The spec has no clear-data algorithm of its own; this implements
+  // what nsIClearDataService's deleteBySite()/deleteByPrincipal() need:
+  // revokes aSchemelessSite's (and every origin under it, matched by
+  // host suffix) association with every entry it stored -- removed from
+  // storing origins/sites and any explicit origins list -- deleting an
+  // entry outright only if that leaves it with no storing origin left.
+  // An entry another, unrelated site also legitimately stored keeps
+  // that other site's copy.
+  //
+  // Known limitation: storage-budget usage (mOriginUsage) is attributed
+  // only to an entry's *first* storing origin (mStoringOrigins[0]); if
+  // that specific origin is the one revoked here while other storing
+  // origins remain, its usage credit is not reattributed or released,
+  // becoming stale. Rare (needs multiple origins to have genuinely
+  // stored byte-identical content) and bounded (can't grow, only go
+  // stale), not fixed here.
+  void RemoveSite(const nsACString& aSchemelessSite);
+
  private:
   CrossOriginStorageRegistry();
 
@@ -192,6 +217,15 @@ class CrossOriginStorageRegistry {
 
   static nsAutoCString MakeKey(COSHashAlgorithm aAlgorithm,
                                const nsACString& aValue);
+
+  // The inverse of MakeKey(): splits a "<algorithm>:<value>" mEntries key
+  // back into its parts, needed wherever a key alone (from an mEntries
+  // iterator, say) isn't enough -- persistence and eviction both need the
+  // algorithm/value pair, not the opaque key string. Returns false (key
+  // left as an empty string) if aKey isn't recognized, which shouldn't
+  // happen for any key MakeKey() itself produced.
+  static bool SplitKey(const nsACString& aKey, COSHashAlgorithm* aOutAlgorithm,
+                       nsACString& aOutValue);
 
   // https://wicg.github.io/cross-origin-storage/#resource-visibility-upgrades
   static void UpgradeResourceVisibility(

@@ -422,6 +422,16 @@ void CrossOriginStoragePersistence::ScanPersistedEntries(
   }
 }
 
+void CrossOriginStoragePersistence::ClearAll() {
+  bool exists = false;
+  mBaseDir->Exists(&exists);
+  if (exists) {
+    mBaseDir->Remove(/* aRecursive */ true);
+  }
+  nsresult rv = mBaseDir->Create(nsIFile::DIRECTORY_TYPE, 0700);
+  (void)NS_WARN_IF(NS_FAILED(rv));
+}
+
 int64_t CrossOriginStoragePersistence::GetDiskCapacity() {
   int64_t capacity = 0;
   nsresult rv = mBaseDir->GetDiskCapacity(&capacity);

@@ -1774,6 +1774,41 @@ const ReportsCleaner = {
   },
 };
 
+// Cross-Origin Storage (https://wicg.github.io/cross-origin-storage/)
+// entries aren't per-origin storage -- a single entry can be legitimately
+// stored by several origins at once -- so, unlike every other cleaner in
+// this file, deleteByHost()/deleteBySite() don't delete by ownership.
+// They revoke the given host's own association with each entry it
+// stored, deleting the entry outright only if that leaves it with no
+// storing origin left; an entry a different, unrelated site also stored
+// keeps that other site's copy. See
+// nsICrossOriginStorageService.idl and CrossOriginStorageRegistry::
+// RemoveSite() for the actual implementation.
+const CrossOriginStorageCleaner = {
+  deleteByHost(aHost) {
+    let service = Cc[
+      "@mozilla.org/dom/cross-origin-storage-service;1"
+    ].getService(Ci.nsICrossOriginStorageService);
+    return service.clearBySite(aHost);
+  },
+
+  deleteByPrincipal(aPrincipal) {
+    return this.deleteByHost(aPrincipal.host, aPrincipal.originAttributes);
+  },
+
+  deleteBySite(aSchemelessSite, _aOriginAttributesPattern) {
+    // TODO: aOriginAttributesPattern.
+    return this.deleteByHost(aSchemelessSite, {});
+  },
+
+  deleteAll() {
+    let service = Cc[
+      "@mozilla.org/dom/cross-origin-storage-service;1"
+    ].getService(Ci.nsICrossOriginStorageService);
+    return service.clear();
+  },
+};
+
 const ContentBlockingCleaner = {
   deleteAll() {
     return lazy.TrackingDBService.clearAll();
@@ -2243,6 +2278,11 @@ const FLAGS_MAP = [
   },
 
   { flag: Ci.nsIClearDataService.CLEAR_DOM_QUOTA, cleaners: [QuotaCleaner] },
+
+  {
+    flag: Ci.nsIClearDataService.CLEAR_CROSS_ORIGIN_STORAGE,
+    cleaners: [CrossOriginStorageCleaner],
+  },
 
   {
     flag: Ci.nsIClearDataService.CLEAR_DOM_PUSH_NOTIFICATIONS,

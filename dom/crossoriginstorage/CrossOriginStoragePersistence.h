@@ -83,6 +83,14 @@ class CrossOriginStoragePersistence {
 
   void DeleteEntry(COSHashAlgorithm aAlgorithm, const nsACString& aValue);
 
+  // Removes every persisted entry by deleting and recreating the whole
+  // base directory, rather than iterating and deleting file by file --
+  // for nsICrossOriginStorageService::clear()'s full wipe, where "every
+  // last entry, including ones a concurrent write might be adding right
+  // now" is exactly the intended (if inherently racy against that
+  // concurrent write) behavior.
+  void ClearAll();
+
   // The total (not free) capacity of the volume the profile directory
   // lives on, for CrossOriginStorageRegistry's storage-budget accounting.
   // Returns 0 on failure -- callers must treat that as "budget unknown",
