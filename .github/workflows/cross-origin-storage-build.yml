@@ -57,7 +57,7 @@ jobs:
 
       - name: mach bootstrap
         shell: bash
-        run: ./mach bootstrap --application-choice=browser --no-interactive
+        run: ./mach bootstrap --application-choice=browser
 
       - name: mach build
         shell: bash
