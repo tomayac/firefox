@@ -48,6 +48,17 @@ XPIDL_SOURCES += [
     "nsICrossOriginStorageService.idl",
 ]
 
+# The real Public Hash List snapshot CrossOriginStoragePublicHashList loads
+# at runtime (see that class's own header comment and
+# generate_public_hash_list.py) -- shipped as a plain data file alongside
+# the GRE rather than compiled in, since embedding ~9 MiB of high-entropy
+# (so, uncompressible) digest data as a C++ array literal would bloat this
+# translation unit and compile time for no benefit over a single lazy file
+# read.
+FINAL_TARGET_FILES.crossoriginstorage += [
+    "data/public-hash-list.bin",
+]
+
 include("/ipc/chromium/chromium-config.mozbuild")
 
 FINAL_LIBRARY = "xul"
@@ -57,4 +68,8 @@ LOCAL_INCLUDES += [
     "/dom/streams",
     "/security/manager/ssl",
     "/xpcom/build",
+]
+
+TEST_DIRS += [
+    "gtest",
 ]
