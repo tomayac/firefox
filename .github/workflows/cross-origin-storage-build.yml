@@ -89,8 +89,9 @@ jobs:
             ${{ github.sha }}, for macOS arm64, Linux x86_64, and Windows
             x86_64.
 
-            Cross-Origin Storage is disabled by default; enable it via
-            `about:config` (`dom.crossOriginStorage.enabled` = `true`) or
-            launch with `--setpref dom.crossOriginStorage.enabled=true`.
+            Cross-Origin Storage is enabled by default in this build, so
+            `navigator.crossOriginStorage` is available immediately -- no
+            `about:config` changes needed. Disable it via `about:config`
+            (`dom.crossOriginStorage.enabled` = `false`) if needed.
           prerelease: true
           files: ${{ steps.artifact.outputs.path }}

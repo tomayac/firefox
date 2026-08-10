@@ -5394,7 +5394,7 @@
 # https://wicg.github.io/cross-origin-storage/
 - name: dom.crossOriginStorage.enabled
   type: RelaxedAtomicBool
-  value: false
+  value: true
   mirror: always
 
 # Whether the WritableFileStream is enabled or disabled.
