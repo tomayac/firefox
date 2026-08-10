@@ -13,17 +13,16 @@ name: Cross-Origin Storage build (macOS / Linux / Windows)
 # it explicitly from the Actions tab (or `gh workflow run`) when you
 # actually want fresh builds to hand out.
 #
-# Platform support note: only the macOS arm64 leg has actually been run
-# and verified end-to-end (it's the machine this feature has been
-# developed and tested on). The Linux and Windows legs follow the same
-# `./mach bootstrap`/`./mach build`/`./mach package` recipe, which is
-# Mozilla's own documented cross-platform build process, but GitHub-hosted
-# runners don't ship the exact toolchains mozilla-central's real CI images
-# do (Windows in particular normally needs MozillaBuild + the Visual
-# Studio Build Tools/Windows SDK, which `./mach bootstrap` attempts to
-# install itself but hasn't been confirmed to succeed non-interactively in
-# this environment). Treat those two legs as best-effort until a run has
-# actually gone green.
+# Platform support note: macOS arm64 and Linux x86_64 have both been run
+# and confirmed to publish successfully end-to-end. Windows x86_64 needs
+# MozillaBuild pre-installed at C:\mozilla-build before `./mach` will run
+# at all (a stock GitHub-hosted runner doesn't ship it, unlike
+# mozilla-central's own purpose-built Windows CI image) -- installed
+# explicitly as this workflow's first Windows-only step; `./mach
+# bootstrap` still needs to successfully pull in the Visual Studio Build
+# Tools/Windows SDK on top of that, which hasn't been confirmed to
+# succeed non-interactively yet. Treat the Windows leg as best-effort
+# until a run has actually gone green.
 
 on:
   workflow_dispatch:
@@ -55,6 +54,28 @@ jobs:
         with:
           fetch-depth: 1
 
+      - name: Install MozillaBuild (Windows only)
+        if: matrix.os == 'windows-2022'
+        shell: pwsh
+        run: |
+          # ./mach itself (build/mach_initialize.py) hard-requires
+          # MozillaBuild pre-installed at exactly C:\mozilla-build before
+          # it will run at all on Windows -- mozilla-central's own CI gets
+          # this for free from a purpose-built Windows image; a stock
+          # GitHub-hosted runner doesn't ship it, so install it explicitly
+          # here, before the first `./mach` invocation of any kind.
+          $installer = "$env:TEMP\MozillaBuildSetup.exe"
+          Invoke-WebRequest -Uri "https://ftp.mozilla.org/pub/mozilla/libraries/win32/MozillaBuildSetup-Latest.exe" -OutFile $installer
+          $proc = Start-Process -FilePath $installer -ArgumentList "/S", "/D=C:\mozilla-build" -PassThru -Wait
+          if ($proc.ExitCode -ne 0) {
+            Write-Error "MozillaBuild installer exited with code $($proc.ExitCode)"
+            exit 1
+          }
+          if (-not (Test-Path "C:\mozilla-build")) {
+            Write-Error "C:\mozilla-build does not exist after running the installer"
+            exit 1
+          }
+
       - name: mach bootstrap
         shell: bash
         run: ./mach bootstrap --application-choice=browser
@@ -71,7 +92,13 @@ jobs:
         id: artifact
         shell: bash
         run: |
-          shopt -s extglob nullglob globstar
+          # extglob (for the Linux pattern's @(bz2|xz)) and nullglob (so a
+          # non-matching pattern expands to nothing, not itself) are all
+          # this needs -- none of the three patterns use `**`, and
+          # globstar isn't available on macOS's ancient bundled bash 3.2
+          # anyway (added in bash 4.0), which silently aborted this whole
+          # step before it ever got to the actual glob.
+          shopt -s extglob nullglob
           matches=(${{ matrix.artifact_glob }})
           if [ "${#matches[@]}" -eq 0 ]; then
             echo "No artifact matching ${{ matrix.artifact_glob }} found under obj-*/dist" >&2
