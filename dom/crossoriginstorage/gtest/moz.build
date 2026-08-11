@@ -4,8 +4,13 @@
 
 UNIFIED_SOURCES += [
     "TestCrossOriginStoragePublicHashList.cpp",
+    "TestCrossOriginStorageRateLimiter.cpp",
+    "TestCrossOriginStorageRegistry.cpp",
+    "TestCrossOriginStorageUtils.cpp",
 ]
 
 LOCAL_INCLUDES += ["/dom/crossoriginstorage"]
+
+include("/ipc/chromium/chromium-config.mozbuild")
 
 FINAL_LIBRARY = "xul-gtest"
