@@ -44,7 +44,12 @@ jobs:
             artifact_glob: "obj-*/dist/*.tar.@(bz2|xz)"
           - name: Windows x86_64
             os: windows-2022
-            artifact_glob: "obj-*/dist/install/sea/*.installer.exe"
+            # `./mach package` on Windows produces a plain .zip directly
+            # under obj-*/dist/ (like the other two platforms) -- the
+            # self-extracting NSIS .installer.exe under dist/install/sea/
+            # is a separate, additional build target this workflow
+            # doesn't invoke, so glob for what actually gets produced.
+            artifact_glob: "obj-*/dist/*.zip"
 
     name: ${{ matrix.name }}
     runs-on: ${{ matrix.os }}
