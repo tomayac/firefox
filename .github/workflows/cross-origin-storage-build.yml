@@ -1,4 +1,10 @@
 name: Cross-Origin Storage build (macOS / Linux / Windows)
+# GitHub sometimes keeps showing a workflow's *first-ever* `name:` in the
+# Actions UI/API (this one started life as a macOS-only build) even after
+# the YAML's own `name:` is edited -- `run-name:` is evaluated fresh on
+# every run and isn't subject to that staleness, so it's the reliable way
+# to keep each run's own displayed title accurate.
+run-name: Cross-Origin Storage build (macOS / Linux / Windows)
 
 # Builds this branch's Firefox for all three desktop platforms and
 # publishes each as a GitHub Release, so testers don't need to build from
